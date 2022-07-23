@@ -9,7 +9,7 @@ export enum Report {
     RECONNECT_REPORT = 1,
 }
 
-export interface WSMessage {
+export interface SyncWSMessage {
     Op: number;
     Key: string;
     TargetNodeID: string;
