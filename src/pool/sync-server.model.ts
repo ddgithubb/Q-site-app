@@ -9,6 +9,11 @@ export enum Report {
     RECONNECT_REPORT = 1,
 }
 
+export interface LwtSyncWSMessage {
+    Op: number;
+    Data: any
+}
+
 export interface SyncWSMessage {
     Op: number;
     Key: string;
