@@ -96,8 +96,9 @@ export class PoolClient {
         let connection = initializeRTCPeerConnection();
         let dataChannel = initializeMainDataChannel(connection);
     
-        this.mainDataChannelFunctions(dataChannel, msg.TargetNodeID);
-    
+        this.setDataChannelOnMessageFunction(dataChannel);
+        this.setDataChannelOnCloseFunction(dataChannel, msg.TargetNodeID);
+        
         connection.onicegatheringstatechange = () => {
             if (connection.iceGatheringState != 'complete') {
                 return
@@ -127,7 +128,8 @@ export class PoolClient {
         let connection = initializeRTCPeerConnection();
         let dataChannel = initializeMainDataChannel(connection);
     
-        this.mainDataChannelFunctions(dataChannel, msg.TargetNodeID);
+        this.setDataChannelOnMessageFunction(dataChannel);
+        this.setDataChannelOnCloseFunction(dataChannel, msg.TargetNodeID);
     
         dataChannel.onopen = (e) => {
             console.log("DATA CHANNEL WITH", msg.TargetNodeID, "OPENED");
@@ -165,7 +167,7 @@ export class PoolClient {
         }
     
         let sdpData: SDPData = msg.Data;
-    
+
         nodeConnection.dataChannel.onopen = (e) => {
             console.log("DATA CHANNEL WITH", msg.TargetNodeID, "OPENED");
             this.sendActiveNodeSignal(msg.TargetNodeID);
@@ -407,16 +409,18 @@ export class PoolClient {
             }
         }
     }
-    
-    private mainDataChannelFunctions(dataChannel: RTCDataChannel, targetNodeID: string) {
+ 
+    private setDataChannelOnMessageFunction(dataChannel: RTCDataChannel) {
         dataChannel.onmessage = (e: MessageEvent<string>) => {
             console.log("DC RECV", e.data);
             if (e.data == "") return;
             let msg: PoolMessage = JSON.parse(e.data);
             if (msg.src.nodeID == this.nodeID) return;
             this.handleMessage(msg);
-        };
-    
+        }
+    }
+
+    private setDataChannelOnCloseFunction(dataChannel: RTCDataChannel, targetNodeID: string) {
         dataChannel.onclose = (e) => {
             SendSyncWSMessage(this.ws, 2006, { ReportCode: Report.DISCONNECT_REPORT } as ReportNodeData, undefined, targetNodeID);
         }
