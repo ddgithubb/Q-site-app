@@ -1,6 +1,6 @@
 import { NodeStatusData, Report, ReportNodeData, SDPData, Status, SyncWSMessage } from "./sync-server.model";
 import { SendSyncWSMessage } from "./connect-pool";
-import { NodeState, Pool, PoolUpdateLatest, PoolMessage, PoolMessageType, PoolNode } from "./pool.model";
+import { NodeState, Pool, PoolUpdateLatest, PoolMessage, PoolMessageType, PoolNode, PoolMessageAction } from "./pool.model";
 import { getStoreState, store } from "../store/store";
 import { AddActiveNodeAction, AddMessageAction, poolAction, ReceivedMessageAction, RemoveActiveNodeAction, UpdateLatestAction } from "../store/slices/pool.slice";
 import { MAXIMUM_GET_LATEST_MESSAGE_LENGTH } from "../config/caching";
@@ -21,7 +21,7 @@ interface NodePosition {
     PartnerInt: number;
     CenterCluster: boolean;
     ParentClusterNodes: BasicNode[][];
-    ChildClusterPartners: BasicNode[];
+    ChildClusterNodes: BasicNode[][];
 }
 
 export class PoolClient {
@@ -34,9 +34,9 @@ export class PoolClient {
     new: boolean;
     latest: boolean
 
-    constructor(pool: Pool, ws: WebSocket) {
+    constructor(ws: WebSocket, poolKey: number) {
         this.nodeID = "";
-        this.poolKey = pool.key;
+        this.poolKey = poolKey;
         this.ws = ws;
         this.nodePosition = {} as NodePosition;
         this.nodeConnections = new Map<string, NodeConnection>();
@@ -96,8 +96,7 @@ export class PoolClient {
         let connection = initializeRTCPeerConnection();
         let dataChannel = initializeMainDataChannel(connection);
     
-        this.setDataChannelOnMessageFunction(dataChannel);
-        this.setDataChannelOnCloseFunction(dataChannel, msg.TargetNodeID);
+        this.setDataChannelFunctions(dataChannel, msg.TargetNodeID, true);
         
         connection.onicegatheringstatechange = () => {
             if (connection.iceGatheringState != 'complete') {
@@ -128,12 +127,7 @@ export class PoolClient {
         let connection = initializeRTCPeerConnection();
         let dataChannel = initializeMainDataChannel(connection);
     
-        this.setDataChannelOnMessageFunction(dataChannel);
-        this.setDataChannelOnCloseFunction(dataChannel, msg.TargetNodeID);
-    
-        dataChannel.onopen = (e) => {
-            console.log("DATA CHANNEL WITH", msg.TargetNodeID, "OPENED");
-        }
+        this.setDataChannelFunctions(dataChannel, msg.TargetNodeID, false);
     
         let sdpData: SDPData = msg.Data;
     
@@ -168,14 +162,9 @@ export class PoolClient {
     
         let sdpData: SDPData = msg.Data;
 
-        nodeConnection.dataChannel.onopen = (e) => {
-            console.log("DATA CHANNEL WITH", msg.TargetNodeID, "OPENED");
-            this.sendActiveNodeSignal(msg.TargetNodeID);
+        nodeConnection.dataChannel.addEventListener('open', (e) => {
             SendSyncWSMessage(this.ws, 2001, { Status: Status.SUCCESSFUL } as NodeStatusData, msg);
-            if (!this.latest) {
-                this.sendGetLatest(msg.TargetNodeID);
-            }
-        }
+        });
     
         nodeConnection.connection.setRemoteDescription(JSON.parse(sdpData.SDP)).then(null , 
             () => {
@@ -204,34 +193,56 @@ export class PoolClient {
     }
 
     sendActiveNodeSignal(nodeID: string) {
-        this.sendDataChannel(nodeID, JSON.stringify(this.createMessage(PoolMessageType.SIGNAL_STATUS, this.getPool().myNode)));
+        this.sendDataChannel(nodeID, JSON.stringify(this.createMessage(PoolMessageType.SIGNAL_STATUS, PoolMessageAction.DEFAULT, this.getPool().myNode)));
     }
 
     sendInactiveNodeSignal(nodeID: string) {
-        this.handleMessage(this.createMessage(PoolMessageType.SIGNAL_STATUS, {
+        this.handleMessage(this.createMessage(PoolMessageType.SIGNAL_STATUS, PoolMessageAction.DEFAULT, {
             nodeID: nodeID,
             state: NodeState.INACTIVE,
         } as PoolNode)!);
     }
 
     sendGetLatest(nodeID: string) {
-        this.sendDataChannel(nodeID, JSON.stringify(this.createMessage(PoolMessageType.GET_LATEST, undefined, nodeID)));
+        let pool = this.getPool();
+        this.sendDataChannel(nodeID, JSON.stringify(this.createMessage(PoolMessageType.GET_LATEST, PoolMessageAction.REQUEST, {
+            messagesOnly: pool.activeNodes.length != 0,
+            lastMessageID: pool.messages.length > 0 ? pool.messages[pool.messages.length - 1].msgID : "",
+        } as PoolUpdateLatest, nodeID)));
     }
 
-    sendRespondGetLatest(nodeID: string) {
+    sendRespondGetLatest(nodeID: string, messagesOnly: boolean, lastMessageID: string) {
         let pool = this.getPool();
-        this.sendDataChannel(nodeID, JSON.stringify(this.createMessage(PoolMessageType.GET_LATEST, {
-            activeNodes: pool.activeNodes,
-            messages: pool.messages.slice(-MAXIMUM_GET_LATEST_MESSAGE_LENGTH),
-        } as PoolUpdateLatest, nodeID)))
+        let latest: PoolUpdateLatest;
+        if (lastMessageID == "") {
+            latest = {
+                messagesOnly: false,
+                lastMessageID: "",
+                activeNodes: pool.activeNodes,
+                messages: pool.messages.slice(-MAXIMUM_GET_LATEST_MESSAGE_LENGTH),
+            }
+        } else {
+            let i = pool.messages.length - 1;
+            for (; i >= 0; i--) {
+                if (pool.messages[i].msgID == lastMessageID) {
+                    break;
+                }
+            }
+            latest = {
+                messagesOnly: messagesOnly,
+                lastMessageID: i == -1 ? "" : lastMessageID,
+                activeNodes: messagesOnly ? [] : pool.activeNodes,
+                messages: i == -1 ? pool.messages : pool.messages.slice(i + 1),
+            }
+        }
+        this.sendDataChannel(nodeID, JSON.stringify(this.createMessage(PoolMessageType.GET_LATEST, PoolMessageAction.REPLY, latest, nodeID)))
     }
 
     sendTextMessage(text: string) {
-        this.handleMessage(this.createMessage(PoolMessageType.TEXT, text))
+        this.handleMessage(this.createMessage(PoolMessageType.TEXT, PoolMessageAction.DEFAULT, text))
     }
 
     handleMessage(msg?: PoolMessage) {
-
         if (!msg) return;
 
         let pool = this.getPool();
@@ -255,25 +266,26 @@ export class PoolClient {
         if (msg.dest && msg.dest.nodeID == this.nodeID) {
             // console.log("GOT PERSONAL MESSAGE", msg);
             if (msg.type == PoolMessageType.GET_LATEST) {
-                if (msg.data) {
+                if (msg.action == PoolMessageAction.REQUEST) {
+                    this.sendRespondGetLatest(msg.src.nodeID, msg.data.messagesOnly, msg.data.lastMessageID);
+                } else if (msg.action == PoolMessageAction.REPLY) {
                     store.dispatch(poolAction.updateLatest({
                         key: this.poolKey,
                         latest: msg.data,
                     } as UpdateLatestAction))
                     this.latest = true;
-                } else {
-                    this.sendRespondGetLatest(msg.src.nodeID);
                 }
             }
             return
         }
 
-        let msgStr = JSON.stringify(msg)
-        let panelNumber = this.getPanelNumber();
-
         if (!msg.dest) {
             switch (msg.type) {
+            // @ts-ignore
             case PoolMessageType.TEXT:
+                if (msg.data == "") {
+                    return
+                }
             case PoolMessageType.FILE:
                 store.dispatch(poolAction.addMessage({
                     key: this.poolKey,
@@ -321,6 +333,16 @@ export class PoolClient {
                 return
             }
 
+        }
+        
+        this.broadcastMessage(msg);
+    }
+
+    broadcastMessage(msg: PoolMessage) {
+        let msgStr = JSON.stringify(msg)
+        let panelNumber = this.getPanelNumber();
+
+        if (msg.dest) {
             let foundNodeID = "";
             for (let i = 0; i < 3; i++) {
                 let nodeID = this.nodePosition.ParentClusterNodes[panelNumber][i].NodeID;
@@ -335,7 +357,7 @@ export class PoolClient {
                 return
             }
         }
-        
+
         for (let i = 0; i < 3; i++) {
             this.sendDataChannel(this.nodePosition.ParentClusterNodes[panelNumber][i].NodeID, msgStr);
         }
@@ -373,7 +395,7 @@ export class PoolClient {
                     this.sendToParentClusterPanel(2, msgStr);
                 }
                 if (matches != msg.dest.lastSeenPath.length && matches >= srcDestMatches) {
-                    this.sendToChildClusterPartner(msg.dest.lastSeenPath[matches], msgStr);
+                    this.sendToChildClusterPanel(msg.dest.lastSeenPath[matches], msgStr);
                 }
             } 
         } else {
@@ -397,7 +419,7 @@ export class PoolClient {
 
             if (sendDown) {
                 for (let i = 0; i < 2; i++) {
-                    this.sendToChildClusterPartner(i, msgStr);
+                    this.sendToChildClusterPanel(i, msgStr);
                 }
             } 
             if (sendUp) {
@@ -409,8 +431,27 @@ export class PoolClient {
             }
         }
     }
- 
-    private setDataChannelOnMessageFunction(dataChannel: RTCDataChannel) {
+
+    private setDataChannelFunctions(dataChannel: RTCDataChannel, targetNodeID: string, sentOffer: boolean) {
+        dataChannel.onopen = () => {
+            console.log("DATA CHANNEL WITH", targetNodeID, "OPENED");
+            this.sendActiveNodeSignal(targetNodeID);
+            if (!this.latest) {
+                this.sendGetLatest(targetNodeID);
+            } else if (sentOffer) {
+                let isNeighbourNode = false
+                for (let i = 0; i < 3; i++) {
+                    if (this.nodePosition.ParentClusterNodes[this.getPanelNumber()][i].NodeID == targetNodeID) {
+                        isNeighbourNode = true;
+                        break
+                    }
+                }
+                if (isNeighbourNode) {
+                    this.sendGetLatest(targetNodeID);
+                }
+            }
+        }
+
         dataChannel.onmessage = (e: MessageEvent<string>) => {
             console.log("DC RECV", e.data);
             if (e.data == "") return;
@@ -418,9 +459,7 @@ export class PoolClient {
             if (msg.src.nodeID == this.nodeID) return;
             this.handleMessage(msg);
         }
-    }
 
-    private setDataChannelOnCloseFunction(dataChannel: RTCDataChannel, targetNodeID: string) {
         dataChannel.onclose = (e) => {
             SendSyncWSMessage(this.ws, 2006, { ReportCode: Report.DISCONNECT_REPORT } as ReportNodeData, undefined, targetNodeID);
         }
@@ -438,22 +477,18 @@ export class PoolClient {
     }
 
     sendToParentClusterPanel(panelNumber: number, msgStr: string) {
-        if (!this.sendDataChannel(this.nodePosition.ParentClusterNodes[panelNumber][this.nodePosition.PartnerInt].NodeID, msgStr) && this.nodePosition.CenterCluster) {
-            for (let i = 0; i < 3; i++) {
-                if (i != this.nodePosition.PartnerInt) {
-                    if (this.sendDataChannel(this.nodePosition.ParentClusterNodes[panelNumber][i].NodeID, msgStr)) {
-                        return
-                    }
-                }
-            }
+        for (let i = 0; i < 3; i++) {
+            this.sendDataChannel(this.nodePosition.ParentClusterNodes[panelNumber][i].NodeID, msgStr)
         }
     }
 
-    sendToChildClusterPartner(panelNumber: number, msgStr: string) {
-        this.sendDataChannel(this.nodePosition.ChildClusterPartners[panelNumber].NodeID, msgStr);
+    sendToChildClusterPanel(panelNumber: number, msgStr: string) {
+        for (let i = 0; i < 3; i++) {
+            this.sendDataChannel(this.nodePosition.ChildClusterNodes[panelNumber][i].NodeID, msgStr)
+        }
     }
 
-    createMessage(type: PoolMessageType, data?: any, destNodeID?: string): PoolMessage | undefined {
+    createMessage(type: PoolMessageType, action: PoolMessageAction, data?: any, destNodeID?: string): PoolMessage | undefined {
         let lastSeenPath: number[] = [];
         if (destNodeID) {
             for (const node of this.getPool().activeNodes) {
@@ -474,6 +509,7 @@ export class PoolClient {
                 lastSeenPath: lastSeenPath
             } : undefined,
             type: type,
+            action: action,
             created: Date.now(),
             msgID: nanoid(10),
             data: data,

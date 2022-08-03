@@ -1,0 +1,121 @@
+
+textarea {
+    resize: none;
+}
+
+* {
+    scrollbar-width: auto;
+    scrollbar-color: var(--main-color-dark);
+}
+  
+  /* Chrome, Edge, and Safari */
+*::-webkit-scrollbar {
+    width: 8px;
+}
+  
+*::-webkit-scrollbar-track {
+    background: transparent;
+    padding-right: 2px;
+}
+
+*::-webkit-scrollbar-thumb {
+    background-color: var(--main-color-dark);
+    border-radius: 10px;
+}
+
+.pool-view {
+    display: flex;
+    flex-grow: 1;
+    flex-direction: column;
+    padding: 0px;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.messages-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    word-wrap: break-word;
+    overflow-x: hidden;
+    overflow-y: scroll;
+    padding: 0px 40px;
+}
+
+.display-box {
+    display: flex;
+    background: var(--main-color-lightest);
+    border-radius: 5px;
+    margin: 40px;
+    margin-top: 0px;
+    padding: 0;
+}
+
+.text-input {
+    display: flex;
+    flex-grow: 1;
+    padding: 14px !important;
+    border: 0px;
+    background-color: transparent;
+    padding: 0px;
+    margin: 0px;
+    border: none;
+    outline: none;
+    font-size: 16px;
+    text-decoration: none;
+    font-family: inherit;
+}
+
+.action-bar {
+    display: flex;
+    position: fixed;
+    bottom: 150px;
+    width: 70px;
+}
+
+.pool-message {
+    display: flex;
+    flex-direction: column;
+    padding: 15px 0px;
+}
+
+.pool-message-info-bar {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 20px;
+    margin-bottom: 5px;
+}
+
+.pool-message-name {
+    font-weight: bold;
+    font-size: 15px;
+}
+
+.pool-message-date {
+    margin-left: 20px;
+    font-size: 12px;
+    color: var(--text-color-greyed)
+}
+
+.pool-message-text {
+    font-size: 15px;
+}
+
+.pool-message-status {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 14px;
+    background-color: rgba(0, 0, 0, 0.1);
+    padding: 8px;
+    border-radius: 5px;
+    margin: 10px;
+    text-transform: uppercase;
+    color: var(--text-color-greyed)
+}
+
+.pool-start-spacer {
+    margin-top: 20px;
+}
+

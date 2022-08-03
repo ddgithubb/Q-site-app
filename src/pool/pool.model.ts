@@ -11,9 +11,21 @@ export enum PoolMessageType {
     ANNOUNCEMENT,
 }
 
+export enum PoolMessageAction {
+    DEFAULT,
+    REQUEST,
+    REPLY,
+}
+
 export enum NodeState {
     INACTIVE,
     ACTIVE,
+}
+
+export enum PoolConnectionState {
+    CLOSED,
+    CONNECTING,
+    CONNECTED,
 }
 
 export interface PoolMessage {
@@ -27,6 +39,7 @@ export interface PoolMessage {
         lastSeenPath: number[];
     }
     type: PoolMessageType;
+    action: PoolMessageAction;
     created: number;
     msgID: string;
     data: any;
@@ -42,6 +55,7 @@ export interface Pool {
     poolID: string;
     users: PoolUser[];
     key: number;
+    connectionState: PoolConnectionState;
     myNode: PoolNode;
     activeNodes: PoolNode[];
     messages: PoolMessage[];
@@ -49,6 +63,8 @@ export interface Pool {
 }
 
 export interface PoolUpdateLatest {
+    messagesOnly: boolean;
+    lastMessageID: string;
     activeNodes: PoolNode[];
     messages: PoolMessage[];
 }

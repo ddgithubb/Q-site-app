@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE, DEFAULT_RECV_MESSAGES_CACHE } from "../../config/caching";
-import { NodeState, Pool, PoolInfo, PoolUpdateLatest, PoolMessage, PoolMessageType, PoolNode, PoolMessageInfo } from "../../pool/pool.model";
+import { NodeState, Pool, PoolInfo, PoolUpdateLatest, PoolMessage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser } from "../../pool/pool.model";
 
 export interface PoolsState {
     pools: Pool[];
@@ -8,6 +8,11 @@ export interface PoolsState {
 
 const initialState: PoolsState = {
     pools: [],
+}
+
+export interface UpdateConnectionStateAction {
+    key: number;
+    state: PoolConnectionState;
 }
 
 export interface AddMessageAction {
@@ -45,6 +50,7 @@ const poolSlice = createSlice({
                     poolID: poolInfo.PoolID,
                     users: poolInfo.Users,
                     key: poolInfo.Key,
+                    connectionState: PoolConnectionState.CLOSED,
                     myNode: {} as PoolNode,
                     activeNodes: [],
                     messages: [],
@@ -58,14 +64,34 @@ const poolSlice = createSlice({
             pool.receivedMessages = [];
             pool.myNode = action.payload.node;
         },
+        updateConnectionState(state: PoolsState, action: PayloadAction<UpdateConnectionStateAction>) {
+            state.pools[action.payload.key].connectionState = action.payload.state;
+        },
         updateLatest(state: PoolsState, action: PayloadAction<UpdateLatestAction>) {
             let pool = state.pools[action.payload.key];
-            pool.activeNodes = action.payload.latest.activeNodes;
-            pool.messages = action.payload.latest.messages;
-            for (let i = pool.activeNodes.length - 1; i >= 0; i--) {
-                if (pool.activeNodes[i].nodeID == pool.myNode.nodeID) {
-                    pool.activeNodes.splice(i, 1);
-                    return;
+            if (!action.payload.latest.messagesOnly) {
+                pool.activeNodes = action.payload.latest.activeNodes;
+                for (let i = pool.activeNodes.length - 1; i >= 0; i--) {
+                    if (pool.activeNodes[i].nodeID == pool.myNode.nodeID) {
+                        pool.activeNodes.splice(i, 1);
+                        return;
+                    }
+                }
+            }
+            if (action.payload.latest.lastMessageID == "") {
+                pool.messages = action.payload.latest.messages;
+            } else {
+                let i = pool.messages.length - 1;
+                for (; i >= 0; i--) {
+                    if (pool.messages[i].msgID == action.payload.latest.lastMessageID) {
+                        break;
+                    }
+                }
+                if (i == -1) {
+                    pool.messages = action.payload.latest.messages;
+                } else if ((pool.messages.length - 1 - i) < action.payload.latest.messages.length) {
+                    pool.messages = pool.messages.slice(0, i + 1);
+                    pool.messages.push(...action.payload.latest.messages);
                 }
             }
         },

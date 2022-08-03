@@ -1,7 +1,9 @@
 import { HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TIMEOUT_SECONDS, WSHOST } from "../config/http";
 import { LwtSyncWSMessage, SyncWSMessage } from "./sync-server.model";
 import { PoolClient } from "./pool-client";
-import { Pool } from "./pool.model";
+import { Pool, PoolConnectionState } from "./pool.model";
+import { store } from "../store/store";
+import { poolAction, UpdateConnectionStateAction } from "../store/slices/pool.slice";
 
 export var ConnectedPools: Map<string, PoolClient> = new Map<string, PoolClient>();
 
@@ -9,21 +11,27 @@ declare global {
     interface Window { MainPoolClient: PoolClient; }
 }
 
-export function ConnectToPool(pool: Pool) {
-
-    let poolID = pool.poolID
+export function ConnectToPool(poolID: string, poolKey: number, connectIfNotExist: boolean = false): PoolClient {
 
     let p = ConnectedPools.get(poolID);
     if (p) {
+        if (connectIfNotExist) {
+            return p;
+        };
         p.reconnect = false;
         p.ws.close();
     }
+
+    store.dispatch(poolAction.updateConnectionState({
+        key: poolKey,
+        state: PoolConnectionState.CONNECTING,
+    } as UpdateConnectionStateAction));
 
     var ws: WebSocket = new WebSocket(WSHOST + "?poolid=" + poolID);
     var wsMsg: SyncWSMessage;
     var heartbeatInterval: any = undefined;
     var heartbeatTimeout: any = undefined;
-    var poolClient: PoolClient = new PoolClient(pool, ws);
+    var poolClient: PoolClient = new PoolClient(ws, poolKey);
 
     window.MainPoolClient = poolClient;
 
@@ -31,11 +39,15 @@ export function ConnectToPool(pool: Pool) {
 
     ws.onopen = () => {
         console.log("WS OPEN");
+        store.dispatch(poolAction.updateConnectionState({
+            key: poolKey,
+            state: PoolConnectionState.CONNECTED,
+        } as UpdateConnectionStateAction));
         heartbeatInterval = setInterval(() => {
             SendLwtSyncWSMessage(ws, 1000);
             heartbeatTimeout = setTimeout(() => {
                 console.log("Heartbeat TIMEOUT");
-                ConnectToPool(pool);
+                ConnectToPool(poolID, poolKey);
             }, HEARTBEAT_TIMEOUT_SECONDS * 1000);
         }, HEARTBEAT_INTERVAL_SECONDS * 1000);
     };
@@ -55,7 +67,7 @@ export function ConnectToPool(pool: Pool) {
         } else if (wsMsg.Op >= 3000 && wsMsg.Op < 4000) {
             switch (wsMsg.Op) {
             case 3000:
-                ConnectToPool(pool);
+                ConnectToPool(poolID, poolKey);
                 break;
             }
         }
@@ -67,12 +79,19 @@ export function ConnectToPool(pool: Pool) {
         ConnectedPools.delete(poolID);
         poolClient.disconnectAllNodeConnections();
         if (poolClient.reconnect) {
-            ConnectToPool(pool);
+            ConnectToPool(poolID, poolKey);
+        } else {
+            store.dispatch(poolAction.updateConnectionState({
+                key: poolKey,
+                state: PoolConnectionState.CLOSED,
+            } as UpdateConnectionStateAction));
         }
     };
     ws.onerror = async (error: any) => {
         console.log("WS ERROR", error);
     };
+
+    return poolClient;
 }
 
 export function SendLwtSyncWSMessage(ws: WebSocket, op: number, data?: any) {

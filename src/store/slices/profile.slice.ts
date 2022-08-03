@@ -24,7 +24,9 @@ const profileSlice = createSlice({
     initialState: initialState,
     reducers: {
         initProfile(state: ProfileState, action: PayloadAction<ProfileState>) {
-            state = action.payload;
+            state.userID = action.payload.userID;
+            state.deviceType = action.payload.deviceType;
+            state.deviceName = action.payload.deviceName;
         }
     }
 });

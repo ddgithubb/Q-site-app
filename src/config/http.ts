@@ -1,7 +1,8 @@
 import * as FD from "form-data";
 
-const API_DOMAIN: string = "192.168.1.240:8000";
-const SYNC_SERVER_DOMAIN: string = "192.168.1.240:8001";
+const DOMAIN: string = "localhost";
+const API_DOMAIN: string = DOMAIN + ":8000";
+const SYNC_SERVER_DOMAIN: string = DOMAIN + ":8001";
 const VERSION: string = "v1";
 const HOST: string = "http://" + API_DOMAIN;
 const WSHOST: string = "ws://" + SYNC_SERVER_DOMAIN + "/connect";
