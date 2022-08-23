@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE, DEFAULT_RECV_MESSAGES_CACHE } from "../../config/caching";
-import { NodeState, Pool, PoolInfo, PoolUpdateLatest, PoolMessage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser } from "../../pool/pool.model";
+import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser, PoolFileInfo } from "../../pool/pool.model";
 
 export interface PoolsState {
     pools: Pool[];
@@ -20,11 +20,6 @@ export interface AddMessageAction {
     message: PoolMessage
 }
 
-export interface ReceivedMessageAction {
-    key: number;
-    msgID: string;
-}
-
 export interface AddActiveNodeAction {
     key: number;
     node: PoolNode;
@@ -37,7 +32,7 @@ export interface RemoveActiveNodeAction {
 
 export interface UpdateLatestAction {
     key: number;
-    latest: PoolUpdateLatest
+    latest: PoolUpdateLatestInfo
 }
 
 const poolSlice = createSlice({
@@ -45,11 +40,14 @@ const poolSlice = createSlice({
     initialState: initialState,
     reducers: {
         initPools(state: PoolsState, action: PayloadAction<PoolInfo[]>) {
-            for (const poolInfo of action.payload) {
+            let poolsInfo = action.payload
+            for (let i = 0; i < action.payload.length; i++) {
                 state.pools.push({
-                    poolID: poolInfo.PoolID,
-                    users: poolInfo.Users,
-                    key: poolInfo.Key,
+                    PoolID: poolsInfo[i].PoolID,
+                    PoolName: poolsInfo[i].PoolName,
+                    Users: poolsInfo[i].Users,
+                    PoolSettings: poolsInfo[i].Settings,
+                    key: i,
                     connectionState: PoolConnectionState.CLOSED,
                     myNode: {} as PoolNode,
                     activeNodes: [],
@@ -61,11 +59,18 @@ const poolSlice = createSlice({
         resetPool(state: PoolsState, action: PayloadAction<AddActiveNodeAction>) {
             let pool = state.pools[action.payload.key];
             pool.activeNodes = [];
-            pool.receivedMessages = [];
             pool.myNode = action.payload.node;
         },
         updateConnectionState(state: PoolsState, action: PayloadAction<UpdateConnectionStateAction>) {
-            state.pools[action.payload.key].connectionState = action.payload.state;
+            let pool = state.pools[action.payload.key];
+            pool.connectionState = action.payload.state;
+
+            if (action.payload.state != PoolConnectionState.CONNECTED) {
+                pool.activeNodes = [];
+                for (let i = 0; i < pool.Users.length; i++) {
+                    pool.Users[i].activeDevices = undefined;
+                }
+            }
         },
         updateLatest(state: PoolsState, action: PayloadAction<UpdateLatestAction>) {
             let pool = state.pools[action.payload.key];
@@ -74,13 +79,13 @@ const poolSlice = createSlice({
                 for (let i = pool.activeNodes.length - 1; i >= 0; i--) {
                     if (pool.activeNodes[i].nodeID == pool.myNode.nodeID) {
                         pool.activeNodes.splice(i, 1);
-                        return;
+                        break;
                     }
                 }
             }
             if (action.payload.latest.lastMessageID == "") {
                 pool.messages = action.payload.latest.messages;
-            } else {
+            } else if (action.payload.latest.messages.length > 0) {
                 let i = pool.messages.length - 1;
                 for (; i >= 0; i--) {
                     if (pool.messages[i].msgID == action.payload.latest.lastMessageID) {
@@ -103,29 +108,57 @@ const poolSlice = createSlice({
             if (pool.messages.length > DEFAULT_MESSAGES_CACHE) {
                 pool.messages.shift();
             }
-        },
-        receivedMessage(state: PoolsState, action: PayloadAction<ReceivedMessageAction>) {
-            let pool = state.pools[action.payload.key];
-            let msg: PoolMessageInfo = {
-                msgID: action.payload.msgID,
-                received: Date.now(),
-            };
-            pool.receivedMessages.push(msg);
-            if (pool.receivedMessages.length > DEFAULT_RECV_MESSAGES_CACHE) {
-                pool.receivedMessages.shift();
+
+            if (action.payload.message.type == PoolMessageType.FILE) {
+                let fileOffer: PoolFileInfo = action.payload.message.data;
+                if (action.payload.message.src.nodeID == pool.myNode.nodeID) {
+                    pool.myNode.fileOffers.unshift(fileOffer);
+                } else {
+                    for (const node of pool.activeNodes) {
+                        if (node.nodeID == action.payload.message.src.nodeID) {
+                            node.fileOffers.unshift(fileOffer);
+                            break;
+                        }
+                    }
+                }
             }
         },
         addActiveNode(state: PoolsState, action: PayloadAction<AddActiveNodeAction>) {
             let pool = state.pools[action.payload.key];
             pool.activeNodes.push(action.payload.node);
+
+            for (let i = 0; i < pool.Users.length; i++) {
+                if (pool.Users[i].UserID == action.payload.node.userID) {
+                    if (!pool.Users[i].activeDevices) pool.Users[i].activeDevices = [];
+                    pool.Users[i].activeDevices?.push(action.payload.node);
+                    break;
+                }
+            }
         },
         removeActiveNode(state: PoolsState, action: PayloadAction<RemoveActiveNodeAction>) {
             let pool = state.pools[action.payload.key];
+            let userID = "";
             for (let i = 0; i < pool.activeNodes.length; i++) {
                 if (pool.activeNodes[i].nodeID == action.payload.nodeID) {
+                    userID = pool.activeNodes[i].userID;
                     pool.activeNodes.splice(i, 1);
                 }
             }
+
+            if (userID != "") {
+                for (let i = 0; i < pool.Users.length; i++) {
+                    if (pool.Users[i].UserID == userID) {
+                        if (!pool.Users[i].activeDevices) break;
+                        for (let j = 0; j < pool.Users[i].activeDevices!.length; j++) {
+                            if (pool.Users[i].activeDevices![j].nodeID == action.payload.nodeID) {
+                                pool.Users[i].activeDevices!.splice(j, 1);
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            
         }
     }
 });

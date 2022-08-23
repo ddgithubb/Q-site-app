@@ -13,6 +13,7 @@
     "@types/react": "^18.0.15",
     "@types/react-dom": "^18.0.6",
     "@types/webrtc": "^0.0.32",
+    "@types/wicg-file-system-access": "^2020.9.5",
     "framer-motion": "^6.5.1",
     "nanoid": "^4.0.0",
     "react": "^18.2.0",
@@ -20,6 +21,7 @@
     "react-redux": "^8.0.2",
     "react-router-dom": "^6.3.0",
     "react-scripts": "5.0.1",
+    "sanitize-html": "^2.7.1",
     "typescript": "^4.7.4",
     "web-vitals": "^2.1.4",
     "webrtc": "^1.14.1"
@@ -50,5 +52,8 @@
       "last 1 firefox version",
       "last 1 safari version"
     ]
+  },
+  "devDependencies": {
+    "@types/sanitize-html": "^2.6.2"
   }
 }

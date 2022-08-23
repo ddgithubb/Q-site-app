@@ -3,14 +3,23 @@
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans:wght@600&display=swap');
 
 :root {
-  --main-color-lightest: #c6d5ff;
-  --main-color-light: #81aef7;
-  --main-color: #6C99E0;
+  --main-color-lightest: #d2deff;
+  --main-color-light: #548ce6;
+  --main-color: #3b6bb9;
   --main-color-dark: #5173A8 ;
   --main-color-darker: #364D70;
   --main-color-darkest: #1B2638;
 
-  --text-color-greyed: #4c5364;
+  --dark-color: #202124;
+  --dark-color-secondary: #19191b;
+
+  --grey-color: #4f5157;
+
+  --light-color: #dce1f1;
+  --light-color-secondary: #aaacb1;
+
+  --success-color: #30C64C;
+  --danger-color: #D43333;
 }
 
 body {
@@ -19,9 +28,30 @@ body {
   font-family: 'Noto Sans', sans-serif;
   height: 100vh;
   width: 100vw;
-  background-color: var(--main-color-light);
+  background-color: var(--dark-color);
+  color: var(--light-color);
 }
 
 img {
   -webkit-user-drag: none;
+}
+
+* {
+  scrollbar-width: auto;
+  scrollbar-color: #0c0c0c;
+}
+
+/* Chrome, Edge, and Safari */
+*::-webkit-scrollbar {
+  width: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+  padding-right: 2px;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #0c0c0c;
+  border-radius: 10px;
 }

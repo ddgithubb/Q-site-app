@@ -14,7 +14,7 @@ export interface ProfileState {
 }
 
 const initialState: ProfileState = {
-    userID: "",
+    userID: "TEST_USER_ID",
     deviceType: DeviceType.COMPUTER,
     deviceName: "Main device",
 }

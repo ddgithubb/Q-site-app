@@ -1,35 +1,39 @@
 
-export enum Status {
+export enum SSStatus {
     UNSUCCESSFUL = 0,
     SUCCESSFUL = 1,
 }
 
-export enum Report {
+export enum SSReportCodes {
     DISCONNECT_REPORT = 0,
     RECONNECT_REPORT = 1,
 }
 
-export interface LwtSyncWSMessage {
+export interface SSLwtMessage {
     Op: number;
     Data: any
 }
 
-export interface SyncWSMessage {
+export interface SSMessage {
     Op: number;
     Key: string;
     TargetNodeID: string;
     Data: any
 }
 
-export interface SDPData {
+export interface SSSDPData {
     SDP: string;
     Status: number;
 }
 
-export interface NodeStatusData {
+export interface SSDisconnectData {
+    RemoveFromPool: boolean;
+}
+
+export interface SSNodeStatusData {
     Status: number;
 }
 
-export interface ReportNodeData {
+export interface SSReportNodeData {
     ReportCode: number;
 }
