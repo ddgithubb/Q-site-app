@@ -65,10 +65,10 @@ export class PoolManagerClass {
         return true;
     }
 
-    async sendRequestFileToPool(poolID: string, poolFileInfo: PoolFileInfo, chunksMissing?: number[][]): Promise<boolean> {
+    async sendRequestFileToPool(poolID: string, poolFileInfo: PoolFileInfo, chunksMissing?: number[][], inQueue: boolean = false): Promise<boolean> {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
-        await poolClient.sendRequestFile(poolFileInfo, chunksMissing);
+        await poolClient.sendRequestFile(poolFileInfo, chunksMissing, inQueue);
         return true;
     }
 }

@@ -34,7 +34,7 @@ export enum PoolConnectionState {
 
 export interface PoolMessage {
     src: PoolMessageSourceInfo;
-    dest?: PoolMessageDestinationInfo;
+    dests?: PoolMessageDestinationInfo[];
     type: PoolMessageType;
     action: PoolMessageAction;
     msgID: string;
@@ -77,6 +77,7 @@ export interface Pool {
     connectionState: PoolConnectionState;
     myNode: PoolNode;
     activeNodes: PoolNode[];
+    downloadQueue: PoolFileInfo[];
     messages: PoolMessage[];
 }
 
@@ -118,6 +119,7 @@ export interface PoolFileInfo {
     nodeID: string;
     fileName: string;
     totalSize: number;
+    downloadProgress?: number;
 }
 
 export type PoolChunkRange = number[];
@@ -125,8 +127,13 @@ export type PoolChunkRange = number[];
 export interface PoolFileRequest {
     fileID: string;
     requestFromOrigin: boolean;
+    requestingNodeID: string;
     chunksMissing: PoolChunkRange[];
     cacheChunksCovered: number[];
+    startChunkNumber?: number;
+    wrappedAround?: boolean;
+    nextChunkNumber?: number;
+    chunksMissingRangeNumber?: number;
     cacheChunksSet?: Set<number>;
     cancelled?: boolean;
 }

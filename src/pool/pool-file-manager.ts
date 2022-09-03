@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import { fileSizeToString, kibibytesToBytes, mebibytesToBytes } from "../helpers/file-size";
-import { store } from "../store/store";
+import { poolAction, RemoveDownloadAction, UpdateDownloadProgressAction } from "../store/slices/pool.slice";
+import { getStoreState, store } from "../store/store";
 import { PoolManager } from "./global";
 import { getCacheChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
 import { PoolChunkRange, PoolFileInfo, PoolFileRequest, PoolNode } from "./pool.model";
@@ -19,9 +20,11 @@ interface FileOffer {
 }
 
 interface FileDownload {
-    poolFileInfo: PoolFileInfo;
     poolID: string;
+    poolKey: number;
+    poolFileInfo: PoolFileInfo;
     lastModified: number;
+    lastProgress: number;
     totalChunks: number;
     chunksDownloaded: number;
     chunksDownloadedMap: boolean[];
@@ -150,32 +153,27 @@ export class FileManagerClass {
                 return;
             }
             this.fileDownloads.forEach((fileDownload, fileID) => {
+                if (fileDownload.chunksDownloaded == 0) return;
                 if (Date.now() >= fileDownload.lastModified + 5000) {
-                    if (Date.now() >= fileDownload.lastModified + 10000) {
-                        console.log("Didn't get chunks in 10 seconds")
-                        this.completeFileDownload(fileID);
-                    } else {
-                        console.log("Didn't get chunks in 5 seconds")
-                        let chunksMissing: number[][] = []; 
-                        let curRange: number[] | undefined = undefined;
-                        for (let i = 0; i < fileDownload.chunksDownloadedMap.length; i++) {
-                            if (!fileDownload.chunksDownloadedMap[i]) {
-                                if (!curRange) {
+                    let chunksMissing: number[][] = []; 
+                    let curRange: number[] | undefined = undefined;
+                    for (let i = 0; i < fileDownload.chunksDownloadedMap.length; i++) {
+                        if (!fileDownload.chunksDownloadedMap[i]) {
+                            if (!curRange) {
+                                curRange = [i, i];
+                                chunksMissing.push(curRange);
+                            } else {
+                                if (i - 1 == curRange[1]) {
+                                    curRange[1] = i;
+                                } else {
                                     curRange = [i, i];
                                     chunksMissing.push(curRange);
-                                } else {
-                                    if (i - 1 == curRange[1]) {
-                                        curRange[1] = i;
-                                    } else {
-                                        curRange = [i, i];
-                                        chunksMissing.push(curRange);
-                                    }
                                 }
                             }
                         }
-                        if (chunksMissing.length != 0) {
-                            PoolManager.sendRequestFileToPool(fileDownload.poolID, fileDownload.poolFileInfo, chunksMissing);
-                        }
+                    }
+                    if (chunksMissing.length != 0) {
+                        PoolManager.sendRequestFileToPool(fileDownload.poolID, fileDownload.poolFileInfo, chunksMissing);
                     }
                 }
             });
@@ -218,7 +216,7 @@ export class FileManagerClass {
         return true;
     }
 
-    async addFileDownload(poolID: string, poolFileInfo: PoolFileInfo): Promise<boolean> {
+    async addFileDownload(poolID: string, poolKey: number, poolFileInfo: PoolFileInfo): Promise<boolean> {
         if (!this.checkFileSizeLimit(poolFileInfo.totalSize)) return false;
         let directoryHandle = undefined;
         let fileHandle = undefined;
@@ -246,8 +244,9 @@ export class FileManagerClass {
         let totalChunks = Math.ceil(poolFileInfo.totalSize / CHUNK_SIZE);
         chunksDownloadedMap[totalChunks - 1] = false;
         this.fileDownloads.set(poolFileInfo.fileID, {
-            poolFileInfo: poolFileInfo,
             poolID: poolID,
+            poolKey: poolKey,
+            poolFileInfo: poolFileInfo,
             lastModified: Date.now(),
             totalChunks: totalChunks,
             chunksDownloaded: 0,
@@ -265,11 +264,17 @@ export class FileManagerClass {
     addFileChunk(fileID: string, chunkNumber: number, binaryData: ArrayBuffer) {
         let fileDownload = this.fileDownloads.get(fileID);
         if (!fileDownload) return;
-        if (fileDownload.chunksDownloadedMap[chunkNumber] == true) return
+        if (fileDownload.chunksDownloadedMap[chunkNumber] == true) {
+            // console.log("ALREADY RECEIVED", chunkNumber);
+            return;
+        }
 
         let offset = chunkNumber * CHUNK_SIZE
         if (this.fileSystemAccess) {
-            fileDownload.fileStream?.write({ type: "write", position: offset, data: binaryData }).catch((e) => this.completeFileDownload(fileID));
+            fileDownload.fileStream?.write({ type: "write", position: offset, data: binaryData }).catch((e) => {
+                console.log(e);
+                this.completeFileDownload(fileID)
+            });
         } else {
             fileDownload.memoryChunks?.set(new Uint8Array(binaryData), offset);
         }
@@ -277,6 +282,16 @@ export class FileManagerClass {
         fileDownload.lastModified = Date.now();
         fileDownload.chunksDownloadedMap[chunkNumber] = true;
         fileDownload.chunksDownloaded++;
+
+        let progress = Math.trunc((fileDownload.chunksDownloaded / fileDownload.totalChunks) * 100);
+        if (progress != fileDownload.lastProgress) {
+            fileDownload.lastProgress = progress;
+            store.dispatch(poolAction.updateDownloadProgress({
+                key: fileDownload.poolKey,
+                fileID: fileDownload.poolFileInfo.fileID,
+                progress: progress,
+            } as UpdateDownloadProgressAction));
+        }
         
         if (fileDownload.chunksDownloaded == fileDownload.totalChunks) {
             this.completeFileDownload(fileID);
@@ -305,6 +320,20 @@ export class FileManagerClass {
             }
             fileDownload.memoryChunks = undefined;
         }
+
+        if (fileDownload.chunksDownloaded != fileDownload.totalChunks) {
+            alert("Error downloading " + fileDownload.poolFileInfo.fileName);
+        }
+
+        store.dispatch(poolAction.removeDownload({
+            key: fileDownload.poolKey,
+            fileID: fileDownload.poolFileInfo.fileID,
+        } as RemoveDownloadAction))
+        let dq = getStoreState().pool.pools[fileDownload.poolKey].downloadQueue; 
+        if (dq.length > 0) {
+            PoolManager.sendRequestFileToPool(fileDownload.poolID, dq[0], undefined, true);
+        }
+        
         this.fileDownloads.delete(fileID);
     }
 
@@ -385,32 +414,32 @@ export class FileManagerClass {
         poolChunksMapStore.put(cacheChunkMapData, fileID)
         poolChunksCacheStore.put(cacheChunk.chunks, key);
 
-        if (this.currentCacheChunkSize && this.currentCacheChunkSize > this.maxCacheChunkSize) {
-            let overflowSize = (this.currentCacheChunkSize - this.maxCacheChunkSize) + OVERFLOW_CACHE_REDUCTION_AMOUNT;
-            let r = poolChunksCacheStore.openCursor();
-            r.onsuccess = (e) => {
-                if (!r.result) return;
-                let key: string = r.result.key as string;
-                let info = key.split(':');
-                let data = this.cacheChunkMap.get(info[2]);
-                if (data) {
-                    let pos = searchPosInCacheChunkMapData(data, parseInt(info[1]));
-                    if (pos >= 0) {
-                        data.splice(pos, 1);
-                    }
-                    if (data.length != 0) {
-                        poolChunksMapStore.put(data, info[2]);
-                    } else {
-                        poolChunksMapStore.delete(info[2]);
-                    }
-                }
-                poolChunksCacheStore.delete(key);
-                overflowSize--;
-                this.currentCacheChunkSize!--;
-                if (overflowSize == 0) return;
-                r.result.continue();
-            }
-        }
+        // if (this.currentCacheChunkSize && this.currentCacheChunkSize > this.maxCacheChunkSize) {
+        //     let overflowSize = (this.currentCacheChunkSize - this.maxCacheChunkSize) + OVERFLOW_CACHE_REDUCTION_AMOUNT;
+        //     let r = poolChunksCacheStore.openCursor();
+        //     r.onsuccess = (e) => {
+        //         if (!r.result) return;
+        //         let key: string = r.result.key as string;
+        //         let info = key.split(':');
+        //         let data = this.cacheChunkMap.get(info[2]);
+        //         if (data) {
+        //             let pos = searchPosInCacheChunkMapData(data, parseInt(info[1]));
+        //             if (pos >= 0) {
+        //                 data.splice(pos, 1);
+        //             }
+        //             if (data.length != 0) {
+        //                 poolChunksMapStore.put(data, info[2]);
+        //             } else {
+        //                 poolChunksMapStore.delete(info[2]);
+        //             }
+        //         }
+        //         poolChunksCacheStore.delete(key);
+        //         overflowSize--;
+        //         this.currentCacheChunkSize!--;
+        //         if (overflowSize == 0) return;
+        //         r.result.continue();
+        //     }
+        // }
     }
 
     getCacheChunk(key: string): Promise<ArrayBuffer[]> {
@@ -427,9 +456,11 @@ export class FileManagerClass {
         let trans = this.objectStoreDB.transaction(['pool-chunks-cache'], 'readonly');
         let req = trans.objectStore('pool-chunks-cache').get(key);
         req.onsuccess = (e) =>{
+            // console.log("SUCCESS CACHE CHUNK", key, req.result);
             resolve(req.result);
         }
         req.onerror = (e) => {
+            // console.log("ERROR CACHE CHUNK", key);
             reject();
         }
         return promise;

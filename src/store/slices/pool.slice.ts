@@ -35,6 +35,22 @@ export interface UpdateLatestAction {
     latest: PoolUpdateLatestInfo
 }
 
+export interface AddDownloadAction {
+    key: number;
+    fileInfo: PoolFileInfo
+}
+
+export interface UpdateDownloadProgressAction {
+    key: number;
+    fileID: string;
+    progress: number;
+}
+
+export interface RemoveDownloadAction {
+    key: number;
+    fileID: string;
+}
+
 const poolSlice = createSlice({
     name: "pool",
     initialState: initialState,
@@ -51,6 +67,7 @@ const poolSlice = createSlice({
                     connectionState: PoolConnectionState.CLOSED,
                     myNode: {} as PoolNode,
                     activeNodes: [],
+                    downloadQueue: [],
                     messages: [],
                     receivedMessages: [],
                 } as Pool)
@@ -158,7 +175,26 @@ const poolSlice = createSlice({
                     }
                 }
             }
-            
+        },
+        addDownload(state: PoolsState, action: PayloadAction<AddDownloadAction>) {
+            state.pools[action.payload.key].downloadQueue.push(action.payload.fileInfo);
+        },
+        updateDownloadProgress(state: PoolsState, action: PayloadAction<UpdateDownloadProgressAction>) {
+            let pool = state.pools[action.payload.key];
+            for (let i = 0; i < pool.downloadQueue.length; i++) {
+                if (pool.downloadQueue[i].fileID == action.payload.fileID) {
+                    pool.downloadQueue[i].downloadProgress = action.payload.progress;
+                }
+            }
+        },
+        removeDownload(state: PoolsState, action: PayloadAction<RemoveDownloadAction>) {
+            let pool = state.pools[action.payload.key];
+            for (let i = 0; i < pool.downloadQueue.length; i++) {
+                if (pool.downloadQueue[i].fileID == action.payload.fileID) {
+                    pool.downloadQueue.splice(i, 1);
+                    return;
+                }
+            }
         }
     }
 });

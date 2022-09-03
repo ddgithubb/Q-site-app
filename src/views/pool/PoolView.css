@@ -113,6 +113,7 @@ textarea {
 /* Display Containers */
 .display-container {
     display: flex;
+    position: relative;
     flex-direction: column;
     background-color: var(--dark-color);
     border-top: 2px solid var(--dark-color-secondary);
@@ -201,7 +202,7 @@ textarea {
     cursor: pointer;
     gap: 10px;
     max-width: 300px;
-    min-width: 0px;;
+    min-width: 0px;
     white-space: nowrap;
 }
 
@@ -231,6 +232,61 @@ textarea {
     cursor:text;
 }
 
+.display-overlay-container {
+    display: flex;
+    flex-direction: column;
+    position: absolute;
+    width: 100vw;
+    top: -50px;
+    left: 0px;
+    overflow-x: scroll;
+}
+
+.display-downloading-files-container {
+    display: flex;
+    flex-direction: row-reverse;
+    flex-grow: 1;
+    padding: 0px 15px;
+    padding-bottom: 5px;
+    gap: 10px;
+    min-width: min-content;
+}
+
+.display-downloading-file {
+    display: flex;
+    align-items: center;
+    height: 35px;
+    background-color: var(--dark-color-secondary);
+    border-radius: 5px;
+    padding: 0px 15px;
+    gap: 10px;
+    max-width: 150px;
+    white-space: nowrap;
+    overflow: hidden;
+    cursor: pointer;
+}
+
+.display-downloading-file-name {
+    flex: 1;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.display-downloading-file-progress {
+    width: 20px;
+    height: 20px;
+}
+
+.CircularProgressbar-path {
+    stroke: var(--main-color-light);
+}
+
+.CircularProgressbar-trail {
+    stroke: var(--main-color-lightest);
+    opacity: 0.1;
+}
 
 /* Action Bar */
 .action-bar {
@@ -238,7 +294,7 @@ textarea {
     flex-direction: column;
     align-items: center;
     position: fixed;
-    bottom: 200px;
+    bottom: 230px;
     right: 0px;
     padding-right: 30px;
 }

@@ -16,6 +16,7 @@ import AddIcon from '../../assets/add.png';
 import DisconnectedIcon from '../../assets/disconnected.png';
 import { fileSizeToString } from '../../helpers/file-size';
 import { PoolManager } from '../../pool/global';
+import { CircularProgressbar } from 'react-circular-progressbar';
 
 enum MessageMode {
     DISCONNECT,
@@ -225,6 +226,30 @@ export function PoolView() {
                 <div className="pool-start-spacer" />
             </div>
             <div className="display-container">
+                <div className="display-overlay-container">
+                    <div className="display-downloading-files-container">
+                        {/* <motion.div className="display-downloading-file" whileHover={{ maxWidth: "500px", transition: { duration: 0.1 } }}>
+                            <div className="display-downloading-file-progress">
+                                <CircularProgressbar value={50} strokeWidth={15} /> 
+                            </div>
+                            <div className="display-downloading-file-name">
+                                1TESTSETSETSETSTESTESETSTE1
+                            </div>
+                        </motion.div> */}
+                        {
+                            pool?.downloadQueue.map((fileInfo) => (
+                                <motion.div key={fileInfo.fileID} className="display-downloading-file" whileHover={{ maxWidth: "500px", transition: { duration: 0.1 } }}>
+                                    <div className="display-downloading-file-progress">
+                                        <CircularProgressbar value={fileInfo.downloadProgress || 0} strokeWidth={15} /> 
+                                    </div>
+                                    <div className="display-downloading-file-name">
+                                        {fileInfo.fileName}
+                                    </div>
+                                </motion.div>
+                            ))
+                        }
+                    </div>
+                </div>
                 <div className="display-info-bar">
                     <div className="display-info-bar-pool-name">
                         {pool?.PoolName}
