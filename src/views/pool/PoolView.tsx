@@ -2,7 +2,7 @@ import React, { createRef, LegacyRef, useEffect, useMemo, useRef, useState } fro
 import { useSelector } from 'react-redux';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { PoolClient } from '../../pool/pool-client';
-import { PoolConnectionState, PoolFileInfo, PoolMessageType, PoolUser } from '../../pool/pool.model';
+import { PoolConnectionState, PoolFileInfo, PoolMessageType, PoolNodeState, PoolUser } from '../../pool/pool.model';
 import { getStoreState, GlobalState } from '../../store/store';
 import sanitizeHtml from 'sanitize-html';
 import './PoolView.css';
@@ -199,16 +199,22 @@ export function PoolView() {
                 {
                     pool?.messages.map((msg, index) => (
                         <div className="pool-message-container" key={msg.msgID}>
-                            <div className="pool-message-info-bar">
-                                <div className="pool-message-name">
-                                    {poolUsers.get(msg.userID)?.DisplayName}
-                                </div>
-                                <div className="pool-message-date">
-                                    {new Date(msg.created).toLocaleTimeString('en-US')}
-                                </div>
-                            </div>
                             {
-                                msg.type == PoolMessageType.TEXT ? (
+                                msg.type == PoolMessageType.TEXT || msg.type == PoolMessageType.FILE || msg.type == PoolMessageType.IMAGE ? (
+                                    <div className="pool-message-info-bar">
+                                        <div className="pool-message-name">
+                                            {poolUsers.get(msg.userID)?.DisplayName}
+                                        </div>
+                                        <div className="pool-message-date">
+                                            {new Date(msg.created).toLocaleTimeString('en-US')}
+                                        </div>
+                                    </div>
+                                ) : undefined
+                            }
+                            {
+                                msg.type == PoolMessageType.SIGNAL_STATUS ? (
+                                    <div className="pool-message-node-status">{msg.data.nodeID} {poolUsers.get(msg.data.userID)?.DisplayName} has {msg.data.state == PoolNodeState.ACTIVE ? "joined" : "left"}</div>
+                                ) : msg.type == PoolMessageType.TEXT ? (
                                     <div className="pool-message-text" dangerouslySetInnerHTML={{ __html: sanitizeHtml(msg.data, { allowedTags: [ 'br' ] }) }}/>
                                 ) : msg.type == PoolMessageType.FILE ? (
                                     <div className="pool-message-file-data-container">
@@ -218,6 +224,8 @@ export function PoolView() {
                                             <span className="pool-message-file-size">{fileSizeToString(msg.data.totalSize)}</span>
                                         </div>
                                     </div>
+                                ) : msg.type == PoolMessageType.IMAGE ? (
+                                    <></>
                                 ) : undefined
                             }
                         </div>

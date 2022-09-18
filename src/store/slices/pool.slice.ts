@@ -10,6 +10,10 @@ const initialState: PoolsState = {
     pools: [],
 }
 
+export interface ExecPoolAction {
+    key: number;
+}
+
 export interface UpdateConnectionStateAction {
     key: number;
     state: PoolConnectionState;
@@ -30,9 +34,9 @@ export interface RemoveActiveNodeAction {
     nodeID: string;
 }
 
-export interface UpdateLatestAction {
+export interface UpdateActiveNodesAction {
     key: number;
-    latest: PoolUpdateLatestInfo
+    activeNodes: PoolNode[];
 }
 
 export interface AddDownloadAction {
@@ -69,14 +73,22 @@ const poolSlice = createSlice({
                     activeNodes: [],
                     downloadQueue: [],
                     messages: [],
-                    receivedMessages: [],
                 } as Pool)
             }
         },
+        clearPool(state: PoolsState, action: PayloadAction<ExecPoolAction>) {
+            let pool = state.pools[action.payload.key];
+            pool.myNode = {} as PoolNode;
+            pool.activeNodes = [];
+            pool.downloadQueue = [];
+            pool.messages = [];
+        },
         resetPool(state: PoolsState, action: PayloadAction<AddActiveNodeAction>) {
             let pool = state.pools[action.payload.key];
-            pool.activeNodes = [];
             pool.myNode = action.payload.node;
+            pool.activeNodes = [];
+            // pool.downloadQueue = [];
+            pool.messages = [];
         },
         updateConnectionState(state: PoolsState, action: PayloadAction<UpdateConnectionStateAction>) {
             let pool = state.pools[action.payload.key];
@@ -85,38 +97,49 @@ const poolSlice = createSlice({
             if (action.payload.state != PoolConnectionState.CONNECTED) {
                 pool.activeNodes = [];
                 for (let i = 0; i < pool.Users.length; i++) {
-                    pool.Users[i].activeDevices = undefined;
+                    pool.Users[i].activeNodes = undefined;
                 }
             }
         },
-        updateLatest(state: PoolsState, action: PayloadAction<UpdateLatestAction>) {
+        updateActiveNodes(state: PoolsState, action: PayloadAction<UpdateActiveNodesAction>) {
             let pool = state.pools[action.payload.key];
-            if (!action.payload.latest.messagesOnly) {
-                pool.activeNodes = action.payload.latest.activeNodes;
-                for (let i = pool.activeNodes.length - 1; i >= 0; i--) {
-                    if (pool.activeNodes[i].nodeID == pool.myNode.nodeID) {
-                        pool.activeNodes.splice(i, 1);
-                        break;
-                    }
-                }
-            }
-            if (action.payload.latest.lastMessageID == "") {
-                pool.messages = action.payload.latest.messages;
-            } else if (action.payload.latest.messages.length > 0) {
-                let i = pool.messages.length - 1;
-                for (; i >= 0; i--) {
-                    if (pool.messages[i].msgID == action.payload.latest.lastMessageID) {
-                        break;
-                    }
-                }
-                if (i == -1) {
-                    pool.messages = action.payload.latest.messages;
-                } else if ((pool.messages.length - 1 - i) < action.payload.latest.messages.length) {
-                    pool.messages = pool.messages.slice(0, i + 1);
-                    pool.messages.push(...action.payload.latest.messages);
+            pool.activeNodes = action.payload.activeNodes;
+            for (let i = pool.activeNodes.length - 1; i >= 0; i--) {
+                if (pool.activeNodes[i].nodeID == pool.myNode.nodeID) {
+                    pool.activeNodes.splice(i, 1);
+                    break;
                 }
             }
         },
+        // updateLatest(state: PoolsState, action: PayloadAction<UpdateLatestAction>) {
+        //     let pool = state.pools[action.payload.key];
+        //     if (!action.payload.latest.messagesOnly) {
+        //         pool.activeNodes = action.payload.latest.activeNodes;
+        //         for (let i = pool.activeNodes.length - 1; i >= 0; i--) {
+        //             if (pool.activeNodes[i].nodeID == pool.myNode.nodeID) {
+        //                 pool.activeNodes.splice(i, 1);
+        //                 break;
+        //             }
+        //         }
+        //     }
+        //     if (action.payload.latest.lastMessageID == "") {
+        //         pool.messages = action.payload.latest.messages;
+        //     }
+        //     // else if (action.payload.latest.messages.length > 0) {
+        //     //     let i = pool.messages.length - 1;
+        //     //     for (; i >= 0; i--) {
+        //     //         if (pool.messages[i].msgID == action.payload.latest.lastMessageID) {
+        //     //             break;
+        //     //         }
+        //     //     }
+        //     //     if (i == -1) {
+        //     //         pool.messages = action.payload.latest.messages;
+        //     //     } else if ((pool.messages.length - 1 - i) < action.payload.latest.messages.length) {
+        //     //         pool.messages.splice(i + 1);
+        //     //         pool.messages.push(...action.payload.latest.messages);
+        //     //     }
+        //     // }
+        // },
         addMessage(state: PoolsState, action: PayloadAction<AddMessageAction>) {
             let pool = state.pools[action.payload.key];
             let msg: PoolMessage = action.payload.message;
@@ -146,8 +169,8 @@ const poolSlice = createSlice({
 
             for (let i = 0; i < pool.Users.length; i++) {
                 if (pool.Users[i].UserID == action.payload.node.userID) {
-                    if (!pool.Users[i].activeDevices) pool.Users[i].activeDevices = [];
-                    pool.Users[i].activeDevices?.push(action.payload.node);
+                    if (!pool.Users[i].activeNodes) pool.Users[i].activeNodes = [];
+                    pool.Users[i].activeNodes?.push(action.payload.node);
                     break;
                 }
             }
@@ -165,10 +188,10 @@ const poolSlice = createSlice({
             if (userID != "") {
                 for (let i = 0; i < pool.Users.length; i++) {
                     if (pool.Users[i].UserID == userID) {
-                        if (!pool.Users[i].activeDevices) break;
-                        for (let j = 0; j < pool.Users[i].activeDevices!.length; j++) {
-                            if (pool.Users[i].activeDevices![j].nodeID == action.payload.nodeID) {
-                                pool.Users[i].activeDevices!.splice(j, 1);
+                        if (!pool.Users[i].activeNodes) break;
+                        for (let j = 0; j < pool.Users[i].activeNodes!.length; j++) {
+                            if (pool.Users[i].activeNodes![j].nodeID == action.payload.nodeID) {
+                                pool.Users[i].activeNodes!.splice(j, 1);
                             }
                         }
                         break;

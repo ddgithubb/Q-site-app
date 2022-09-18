@@ -8,10 +8,11 @@ export const FILE_ID_LENGTH = 21;
 export enum PoolMessageType {
     SIGNAL_STATUS,
     GET_LATEST,
-    TEXT,
-    FILE,
     RETRACT_MESSAGE,
     ANNOUNCEMENT,
+    TEXT,
+    FILE,
+    IMAGE,
 }
 
 export enum PoolMessageAction {
@@ -96,7 +97,7 @@ export interface PoolUpdateLatestInfo {
 export interface PoolUser {
     UserID: string;
     DisplayName: string;
-    activeDevices?: PoolNode[];
+    activeNodes?: PoolNode[];
 }
 
 export interface PoolNode {
@@ -111,6 +112,7 @@ export interface PoolNode {
 
 export interface PoolUpdateNodeState {
     nodeID: string;
+    userID: string;
     state: PoolNodeState;
 }
 
@@ -136,6 +138,15 @@ export interface PoolFileRequest {
     chunksMissingRangeNumber?: number;
     cacheChunksSet?: Set<number>;
     cancelled?: boolean;
+}
+
+export interface PoolImageInfo {
+    fileInfo: PoolFileInfo;
+    extension: string;
+    width: number;
+    height: number;
+    previewImage: string;
+    imageUrl?: string;
 }
 
 export interface PoolRetractMessage {

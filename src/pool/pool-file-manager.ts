@@ -5,14 +5,17 @@ import { getStoreState, store } from "../store/store";
 import { PoolManager } from "./global";
 import { getCacheChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
 import { PoolChunkRange, PoolFileInfo, PoolFileRequest, PoolNode } from "./pool.model";
+// @ts-expect-error
+import PoolWorker from 'worker-loader!./pool.worker.js'
+
+const WebworkerPromise = require('webworker-promise');
+const worker = new WebworkerPromise(new PoolWorker());
 
 export const CHUNK_SIZE = kibibytesToBytes(16);
 //export const CACHE_CHUNK_SIZE = kibibytesToBytes(128);
 export const CACHE_CHUNK_SIZE = mebibytesToBytes(1);
 //const chunkSize = mebibytesToBytes(1);
 export const CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR = CACHE_CHUNK_SIZE / CHUNK_SIZE;
-export const OVERFLOW_CACHE_REDUCTION_AMOUNT = 100;
-export const DB_VERSION = 1;
 
 interface FileOffer {
     file: File;
@@ -57,10 +60,10 @@ export class FileManagerClass {
     fileDownloadTimer: NodeJS.Timer | undefined;
     fileCacheChunks: Map<string, CacheChunk>; // key: fileID
     cacheChunkMapDataFlushTimer: NodeJS.Timer | undefined;
-    objectStoreDB: IDBDatabase | undefined;
+    cacheChunkQueue: string[]; // value: cache key
     cacheChunkMap: Map<string, CacheChunkMapData>; // key: fileID
-    currentCacheChunkSize: number | undefined;
     maxCacheChunkSize: number;
+    private webworker: any;
 
     constructor() {
         // for electron file manager, get from appdata + verify existence/populate on start/
@@ -76,54 +79,15 @@ export class FileManagerClass {
         this.currentFileDownloadSize = 0;
         this.fileCacheChunks = new Map<string, CacheChunk>;
         this.cacheChunkMapDataFlushTimer = undefined;
-        this.objectStoreDB = undefined;
+        this.cacheChunkQueue = [];
         this.cacheChunkMap = new Map<string, CacheChunkMapData>;
-        this.currentCacheChunkSize = undefined;
+        this.webworker = worker;
         this.maxCacheChunkSize = store.getState().setting.storageSettings.maxCacheChunkSize / CACHE_CHUNK_SIZE;
-
         this.getObjectStore();
     }
 
     private getObjectStore() {
-        let req = indexedDB.open('pool-db', DB_VERSION);
-
-        req.onsuccess = (e) => {
-            this.objectStoreDB = req.result;
-
-            let trans = this.objectStoreDB.transaction(['pool-chunks-cache', 'pool-chunks-map'], 'readonly');
-
-            let rm = trans.objectStore('pool-chunks-map').openCursor();
-            rm.onsuccess = (e) => {
-                let cursor = rm.result;
-                if (!cursor) return;
-                this.cacheChunkMap.set(cursor.key as string, cursor.value);
-                cursor.continue();
-            }
-
-            let rc = trans.objectStore('pool-chunks-cache').count();
-            rc.onsuccess = (e) => {
-                this.currentCacheChunkSize = rc.result;
-            }
-
-            // window.removeEventListener('unload', () => {
-            //     if (!this.objectStoreDB) return;
-            //     let store =this.objectStoreDB.transaction('pool-chunks-map', 'readwrite').objectStore('pool-chunks-map');
-            //     store.clear()
-            //     this.cacheChunkMap.forEach((data, fileID) => {
-            //         store.put(data, fileID);
-            //     })
-            // });
-        }
-
-        req.onupgradeneeded = (e) => {
-            this.objectStoreDB = req.result;
-            req.result.createObjectStore('pool-chunks-cache');
-            req.result.createObjectStore('pool-chunks-map');
-        }
-
-        req.onerror = (e) => {
-            this.objectStoreDB = undefined;
-        }
+        this.webworker.exec('initDB');
     } 
 
     private startCacheChunksFlushTimer() {
@@ -144,7 +108,6 @@ export class FileManagerClass {
     }
 
     private startFileDownloadTimer() {
-        // PROBLEM, GETTING SECOND WILL TRIGGER MULTIPLE TIMES
         if (this.fileDownloadTimer) return;
         this.fileDownloadTimer = setInterval(() => {
             if (this.fileDownloads.size == 0) {
@@ -155,6 +118,7 @@ export class FileManagerClass {
             this.fileDownloads.forEach((fileDownload, fileID) => {
                 if (fileDownload.chunksDownloaded == 0) return;
                 if (Date.now() >= fileDownload.lastModified + 5000) {
+                    console.log("5 SECONDS NO CHUNKS INTERVAL")
                     let chunksMissing: number[][] = []; 
                     let curRange: number[] | undefined = undefined;
                     for (let i = 0; i < fileDownload.chunksDownloadedMap.length; i++) {
@@ -173,6 +137,7 @@ export class FileManagerClass {
                         }
                     }
                     if (chunksMissing.length != 0) {
+                        console.log("CHUNKS MISSING:", chunksMissing);
                         PoolManager.sendRequestFileToPool(fileDownload.poolID, fileDownload.poolFileInfo, chunksMissing);
                     }
                 }
@@ -338,7 +303,6 @@ export class FileManagerClass {
     }
 
     cacheFileChunk(fileID: string, chunkNumber: number, totalSize: number, chunk: ArrayBuffer) {
-        if (!this.objectStoreDB) return;
         if (!this.cacheChunkMapDataFlushTimer) this.startCacheChunksFlushTimer();
 
         let cacheChunkNumber = getCacheChunkNumber(chunkNumber);
@@ -381,7 +345,6 @@ export class FileManagerClass {
 
     flushCacheChunk(fileID: string, cacheChunk: CacheChunk) {
         this.fileCacheChunks.delete(fileID);
-        if (!this.objectStoreDB) return;
 
         // console.log("Flushing", cacheChunk.cacheChunkNumber);
 
@@ -401,69 +364,35 @@ export class FileManagerClass {
                 return;
             } else {
                 cacheChunkMapData.splice((-pos - 1), 0, cacheChunkData);
-                if (this.currentCacheChunkSize) this.currentCacheChunkSize++;
             }
         }
+        this.cacheChunkQueue.push(key);
 
-        let trans = this.objectStoreDB.transaction(['pool-chunks-cache', 'pool-chunks-map'], 'readwrite');
-        if (!trans) return;
-
-        let poolChunksCacheStore = trans.objectStore('pool-chunks-cache');
-        let poolChunksMapStore = trans.objectStore('pool-chunks-map');
-
-        poolChunksMapStore.put(cacheChunkMapData, fileID)
-        poolChunksCacheStore.put(cacheChunk.chunks, key);
-
-        // if (this.currentCacheChunkSize && this.currentCacheChunkSize > this.maxCacheChunkSize) {
-        //     let overflowSize = (this.currentCacheChunkSize - this.maxCacheChunkSize) + OVERFLOW_CACHE_REDUCTION_AMOUNT;
-        //     let r = poolChunksCacheStore.openCursor();
-        //     r.onsuccess = (e) => {
-        //         if (!r.result) return;
-        //         let key: string = r.result.key as string;
-        //         let info = key.split(':');
-        //         let data = this.cacheChunkMap.get(info[2]);
-        //         if (data) {
-        //             let pos = searchPosInCacheChunkMapData(data, parseInt(info[1]));
-        //             if (pos >= 0) {
-        //                 data.splice(pos, 1);
-        //             }
-        //             if (data.length != 0) {
-        //                 poolChunksMapStore.put(data, info[2]);
-        //             } else {
-        //                 poolChunksMapStore.delete(info[2]);
-        //             }
-        //         }
-        //         poolChunksCacheStore.delete(key);
-        //         overflowSize--;
-        //         this.currentCacheChunkSize!--;
-        //         if (overflowSize == 0) return;
-        //         r.result.continue();
-        //     }
-        // }
+        let deleteKey: string | undefined = undefined;
+        if (this.cacheChunkQueue.length > this.maxCacheChunkSize) {
+            deleteKey = this.cacheChunkQueue.shift();
+            if (deleteKey != undefined && deleteKey != "") {
+                let split = deleteKey.split(':');
+                let data = this.cacheChunkMap.get(split[2]);
+                if (data) {
+                    let pos = searchPosInCacheChunkMapData(data, parseInt(split[1]));
+                    if (pos >= 0) {
+                        data.splice(pos, 1);
+                    }
+                }
+            }
+            console.log("DELETING CACHE CHUNK KEY:", deleteKey);
+        }
+        
+        this.webworker.exec('putCacheChunk', {
+            chunks: cacheChunk.chunks,
+            key: key,
+            deleteKey: deleteKey,
+        }, cacheChunk.chunks);
     }
 
     getCacheChunk(key: string): Promise<ArrayBuffer[]> {
-        let resolve: (value: ArrayBuffer[] | PromiseLike<ArrayBuffer[]>) => void;
-        let reject: (reason?: any) => void;
-        let promise = new Promise<ArrayBuffer[]>((res, rej) => {
-            resolve = res;
-            reject = res;
-        })
-        if (!this.objectStoreDB) {
-            reject!();
-            return promise;
-        }
-        let trans = this.objectStoreDB.transaction(['pool-chunks-cache'], 'readonly');
-        let req = trans.objectStore('pool-chunks-cache').get(key);
-        req.onsuccess = (e) =>{
-            // console.log("SUCCESS CACHE CHUNK", key, req.result);
-            resolve(req.result);
-        }
-        req.onerror = (e) => {
-            // console.log("ERROR CACHE CHUNK", key);
-            reject();
-        }
-        return promise;
+        return this.webworker.exec('getCacheChunk', key);
     }
 
     removeFileoffer() {

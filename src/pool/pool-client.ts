@@ -1,7 +1,7 @@
 import { SSNodeStatusData, SSReportCodes, SSReportNodeData, SSSDPData, SSStatus, SSMessage, SSDisconnectData } from "./sync-server.model";
-import { PoolNodeState, Pool, PoolUpdateLatestInfo, PoolMessage, PoolMessageType, PoolNode, PoolMessageAction, PoolFileInfo, PoolUpdateNodeState, PoolFileRequest, PoolMessageSourceInfo, PoolMessageDestinationInfo, MESSAGE_ID_LENGTH, FILE_ID_LENGTH, PoolMessageInfo, PoolChunkRange } from "./pool.model";
+import { PoolNodeState, Pool, PoolUpdateLatestInfo, PoolMessage, PoolMessageType, PoolNode, PoolMessageAction, PoolFileInfo, PoolUpdateNodeState, PoolFileRequest, PoolMessageSourceInfo, PoolMessageDestinationInfo, MESSAGE_ID_LENGTH, FILE_ID_LENGTH, PoolMessageInfo, PoolChunkRange, PoolImageInfo } from "./pool.model";
 import { getStoreState, store } from "../store/store";
-import { AddActiveNodeAction, AddDownloadAction, AddMessageAction, poolAction, RemoveActiveNodeAction, UpdateLatestAction } from "../store/slices/pool.slice";
+import { AddActiveNodeAction, AddDownloadAction, AddMessageAction, ExecPoolAction, poolAction, RemoveActiveNodeAction, UpdateActiveNodesAction } from "../store/slices/pool.slice";
 import { DEFAULT_RECV_MESSAGES_CACHE, MAXIMUM_GET_LATEST_MESSAGE_LENGTH } from "../config/caching";
 import { nanoid } from "nanoid";
 import { createBinaryMessage, parseBinaryMessage } from "./pool-binary-message";
@@ -11,8 +11,10 @@ import { compactChunkRanges, getCacheChunkNumber } from "./pool-chunks";
 import { CacheChunkData, CacheChunkMapData, CACHE_CHUNK_SIZE, CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR, CHUNK_SIZE } from "./pool-file-manager";
 import { mebibytesToBytes } from "../helpers/file-size";
 import EventEmitter from "events";
+import sharp from 'sharp';
 
 const MAXIMUM_DC_BUFFER_SIZE = mebibytesToBytes(15);
+const PREVIEW_IMAGE_DIMENSION = 10;
 
 interface BasicNode {
     NodeID: string;
@@ -23,7 +25,7 @@ interface DataChannelBufferObject {
     msgID: string;
     data: Uint8Array;
     emitSent: boolean;
-    inQueue?: string[]; // Dest
+    inQueue?: string[]; // dest nodeID
     isADest?: boolean;
     resendDests?: PoolMessageDestinationInfo[];
 }
@@ -49,6 +51,7 @@ export class PoolClient {
     nodeID: string;
     nodePosition: NodePosition;
     nodeConnections: Map<string, NodeConnection>;
+    lastPromoted: number;
     receivedMessages: PoolMessageInfo[];
     activeNodes: Map<string, number[]>; // key: nodeID, value: lastSeenPath;
     availableFiles: Map<string, number>; // key: fileID, value: totalSize
@@ -68,6 +71,7 @@ export class PoolClient {
         this.nodeID = "";
         this.nodePosition = {} as NodePosition;
         this.nodeConnections = new Map<string, NodeConnection>();
+        this.lastPromoted = Date.now();
         this.receivedMessages = [];
         this.activeNodes = new Map<string, number[]>;
         this.availableFiles = new Map<string, number>;
@@ -115,6 +119,16 @@ export class PoolClient {
         this.nodeConnections.clear();
         this.availableFiles.clear();
         this.curFileRequests.clear();
+
+        if (!this.reconnect) {
+            let dq = this.getPool().downloadQueue;
+            for (let i = 0; i < dq.length; i++) {
+                FileManager.completeFileDownload(dq[i].fileID);
+            }
+            store.dispatch(poolAction.clearPool({
+                key: this.poolKey,
+            } as ExecPoolAction))
+        }
     }
 
     ////////////////////////////////////////////////////////////////
@@ -125,6 +139,7 @@ export class PoolClient {
         this.nodePosition = nodePosition;
         this.nodeID = myNodeID;
         console.log(this.nodePosition);
+        this.lastPromoted = Date.now();
         if (this.new) {
             let profileState = getStoreState().profile;
             store.dispatch(poolAction.resetPool({
@@ -142,6 +157,24 @@ export class PoolClient {
             } as AddActiveNodeAction));
             console.log("NodeID", this.nodeID)
             this.new = false;
+
+            if (nodePosition.CenterCluster) {
+                let onlyNode = true;
+                for (let i = 0; i < 3; i++) {
+                    for (let j = 0; j < 3; j++) {
+                        if (nodePosition.ParentClusterNodes[i][j].NodeID != "" && nodePosition.ParentClusterNodes[i][j].NodeID != this.nodeID) {
+                            onlyNode = false;
+                            break;
+                        }
+                    }
+                    if (!onlyNode) break;
+                }
+                if (onlyNode) {
+                    this.latest = true;
+                    this.addActiveNode(this.createMessage(PoolMessageType.SIGNAL_STATUS, PoolMessageAction.DEFAULT, this.getPool().myNode));
+                }
+            }
+
         }
     }
 
@@ -273,23 +306,51 @@ export class PoolClient {
     }
 
     sendInactiveNodeSignal(nodeID: string) {
+        let userID = "";
+        for (const node of this.getPool().activeNodes) {
+            if (node.nodeID == nodeID) {
+                userID = node.userID;
+                break;
+            }
+        }
         this.handleMessage(this.createMessage(PoolMessageType.SIGNAL_STATUS, PoolMessageAction.DEFAULT, {
             nodeID: nodeID,
+            userID: userID,
             state: PoolNodeState.INACTIVE,
         } as PoolUpdateNodeState));
     }
 
-    sendGetLatest(nodeID: string, initialLatest: boolean = false) {
+    sendGetLatest(nodeID: string) {
         let pool = this.getPool();
+        let lastMessageID: string = "";
+        let messages: PoolMessage[] = [];
+        if (this.latest) {
+            for (let i = pool.messages.length - 1; i >= 0; i--) {
+                if (pool.messages[i].received != undefined && pool.messages[i].received! < this.lastPromoted) {
+                    lastMessageID = pool.messages[i].msgID; 
+                    break;
+                } else {
+                    messages.push(pool.messages[i]);
+                }
+            }
+        }
         this.sendDataChannel(nodeID, JSON.stringify(this.createMessage(PoolMessageType.GET_LATEST, PoolMessageAction.REQUEST, {
-            messagesOnly: initialLatest ? false : pool.activeNodes.length != 0 ? false : true,
-            lastMessageID: pool.messages.length > 0 ? pool.messages[pool.messages.length - 1].msgID : "",
+            messagesOnly: !this.latest ? false : pool.activeNodes.length != 0 ? false : true,
+            lastMessageID: lastMessageID,
+            messages: lastMessageID != "" ? messages : [],
         } as PoolUpdateLatestInfo, nodeID)));
     }
 
-    sendRespondGetLatest(nodeID: string, messagesOnly: boolean, lastMessageID: string) {
+    sendRespondGetLatest(nodeID: string, latestRequest: PoolUpdateLatestInfo) {
         let pool = this.getPool();
         let correctedActiveNodes: PoolNode[] = [];
+        let messagesOnly = latestRequest.messagesOnly;
+        let lastMessageID = latestRequest.lastMessageID;
+
+        if (lastMessageID != "") {
+            this.addMessages(latestRequest.messages)
+        }
+
         if (!messagesOnly) {
             correctedActiveNodes = pool.activeNodes.slice();
             correctedActiveNodes.push(pool.myNode);
@@ -310,7 +371,12 @@ export class PoolClient {
                     break;
                 }
             }
-            latest.messages = i == -1 ? pool.messages : pool.messages.slice(i + 1)
+            if (i == -1) {
+                latest.lastMessageID = "";
+                latest.messages = pool.messages;
+            } else {
+                latest.messages = pool.messages.slice(i + 1);
+            }
         }
         //console.log(correctedActiveNodes);
         this.sendDataChannel(nodeID, JSON.stringify(this.createMessage(PoolMessageType.GET_LATEST, PoolMessageAction.REPLY, latest, nodeID)))
@@ -330,6 +396,26 @@ export class PoolClient {
             totalSize: file.size,
         } as PoolFileInfo))
     }
+    
+    // async sendImageOffer(file: File) {
+    //     let fileID: string = nanoid(FILE_ID_LENGTH);
+    //     let image = sharp(Buffer.from(await file.arrayBuffer()));
+    //     let metadata = await image.metadata();
+    //     if (!metadata.width || !metadata.height) return;
+    //     let previewImage = (await (metadata.width < metadata.height ? image.resize(PREVIEW_IMAGE_DIMENSION) : image.resize(undefined, PREVIEW_IMAGE_DIMENSION)).toBuffer()).toString('base64');
+    //     if (!FileManager.addFileOffer(this.poolID, fileID, file)) return;
+    //     this.handleMessage(this.createMessage(PoolMessageType.FILE, PoolMessageAction.DEFAULT, {
+    //         fileInfo: {
+    //             fileID: fileID,
+    //             nodeID: this.nodeID,
+    //             fileName: file.name,
+    //             totalSize: file.size,
+    //         } as PoolFileInfo,
+    //         width: metadata.width,
+    //         height: metadata.height,
+    //         previewImage: previewImage,
+    //     } as PoolImageInfo))
+    // }
 
     async sendRequestFile(poolFileInfo: PoolFileInfo, chunksMissing: PoolChunkRange[] = [], inQueue: boolean = false) {
         if (poolFileInfo.nodeID == this.nodeID) return;
@@ -379,7 +465,10 @@ export class PoolClient {
                 dests.splice(i, 1);
             }
         }
-        if (dests.length == 0) return;
+        if (dests.length == 0) {
+            if (nextChunk) nextChunk();
+            return;
+        }
         let src: PoolMessageSourceInfo = this.getSrc();
         let msgID = nanoid(MESSAGE_ID_LENGTH);
         let dcBuffer: DataChannelBufferObject = {
@@ -416,6 +505,8 @@ export class PoolClient {
             compactChunkRanges(fileRequest.chunksMissing);
         }
 
+        // console.log("pass", this.curFileRequests.get(fileRequest.fileID))
+
         let concFileRequests = this.curFileRequests.get(fileRequest.fileID);
         if (!concFileRequests) {
             fileRequest.nextChunkNumber = 0;
@@ -447,15 +538,13 @@ export class PoolClient {
         let partnerIntPath = 0;
         let totalChunks = Math.ceil(fileOffer.file.size / CHUNK_SIZE);
         let destNodeIDs: string[]; // UPDATE DEST EERY TIME NEXT CHUNK IS DONE, SO fileReader.onload doesn't need to check again
-        let dests: PoolMessageDestinationInfo[] = [];
 
         let fileReader = new FileReader();
         fileReader.onload = (e) => {
             if (!e.target) return;
             if (fileOffer?.retracted) return;
             partnerIntPath = getCacheChunkNumber(chunkNumber) % 3;
-            dests = this.getDests(destNodeIDs);
-            this.sendChunk(fileRequest.fileID, chunkNumber++, e.target.result as ArrayBuffer, dests, partnerIntPath, nextChunk);
+            this.sendChunk(fileRequest.fileID, chunkNumber++, e.target.result as ArrayBuffer, this.getDests(destNodeIDs), partnerIntPath, nextChunk);
         }
 
         let nextChunk = () => {
@@ -471,7 +560,7 @@ export class PoolClient {
             let minNextChunkNumber = Infinity;
             for (let i = concFileRequests!.length - 1; i >= 0; i--) {
                 let req = concFileRequests![i];
-                if (req.cancelled) {
+                if (req.cancelled || !this.activeNodes.has(req.requestingNodeID)) {
                     concFileRequests!.splice(i, 1);
                     continue;
                 }
@@ -531,6 +620,7 @@ export class PoolClient {
 
             if (concFileRequests!.length == 0) {
                 this.curFileRequests.delete(fileRequest.fileID);
+                // console.log("DELETING", concFileRequests, this.curFileRequests);
                 return;
             }
             
@@ -600,11 +690,12 @@ export class PoolClient {
             // console.log("SENDING CACHECHUNK NUMBER", cacheChunkData.cacheChunkNumber);
             let nextChunk = () => {
                 // console.log("NEXTCHUNK", j);
-                if (i >= cacheChunk.length) {
+                if (i >= cacheChunk.length || (dests.length == 0 && !hasMyDest)) {
                     nextCacheChunk();
                     // console.log("NEXT CACHE CHUNK");
                     return;
                 }
+
                 chunkNumber = (cacheChunkData.cacheChunkNumber * CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR) + i;
                 i++
                 if (hasMyDest) {
@@ -627,27 +718,33 @@ export class PoolClient {
     ////////////////////////////////////////////////////////////////
 
     updateLatest(updateLatestInfo: PoolUpdateLatestInfo) {
+        this.addMessages(updateLatestInfo.messages);
         if (!updateLatestInfo.messagesOnly) {
             this.activeNodes.clear();
             this.availableFiles.clear();
-        }
-        for (let i = 0; i < updateLatestInfo.activeNodes.length; i++) {
-            this.activeNodes.set(updateLatestInfo.activeNodes[i].nodeID, updateLatestInfo.activeNodes[i].lastSeenPath);
-            for (let j = 0; j < updateLatestInfo.activeNodes[i].fileOffers.length; j++) {
-                this.availableFiles.set(updateLatestInfo.activeNodes[i].fileOffers[j].fileID, updateLatestInfo.activeNodes[i].fileOffers[j].totalSize);
+            for (let i = 0; i < updateLatestInfo.activeNodes.length; i++) {
+                this.activeNodes.set(updateLatestInfo.activeNodes[i].nodeID, updateLatestInfo.activeNodes[i].lastSeenPath);
+                for (let j = 0; j < updateLatestInfo.activeNodes[i].fileOffers.length; j++) {
+                    this.availableFiles.set(updateLatestInfo.activeNodes[i].fileOffers[j].fileID, updateLatestInfo.activeNodes[i].fileOffers[j].totalSize);
+                }
             }
         }
-        store.dispatch(poolAction.updateLatest({
-            key: this.poolKey,
-            latest: updateLatestInfo,
-        } as UpdateLatestAction));
+        if (!updateLatestInfo.messagesOnly) {
+            store.dispatch(poolAction.updateActiveNodes({
+                key: this.poolKey,
+                activeNodes: updateLatestInfo.activeNodes,
+            } as UpdateActiveNodesAction));
+        }
         this.latest = true;
     }
 
-    addActiveNode(node: PoolNode) {
+    addActiveNode(msg: PoolMessage) {
         // console.log("ADDING ACTIVE NODE");
+        let node: PoolNode = msg.data
+        if (this.activeNodes.has(node.nodeID)) return;
+        this.activeNodes.set(node.nodeID, node.lastSeenPath);
+        this.addMessage(msg);
         if (node.nodeID != this.nodeID) {
-            this.activeNodes.set(node.nodeID, node.lastSeenPath);
             store.dispatch(poolAction.addActiveNode({
                 key: this.poolKey,
                 node: node,
@@ -655,7 +752,9 @@ export class PoolClient {
         }
     }
 
-    removeActiveNode(nodeID: string) {
+    removeActiveNode(msg: PoolMessage) {
+        let nodeID: string = msg.data.nodeID;
+        if (!this.activeNodes.has(nodeID)) return;
         this.activeNodes.delete(nodeID);
         let existingNode: PoolNode | undefined = undefined;
         for (const node of this.getPool().activeNodes) {
@@ -669,7 +768,15 @@ export class PoolClient {
                 this.availableFiles.delete(existingNode.fileOffers[i].fileID);
                 FileManager.completeFileDownload(existingNode.fileOffers[i].fileID);
             }
+            // this.curFileRequests.forEach((requests, fileID) => {
+            //     for (let i = 0; i < requests.length; i++) {
+            //         if (requests[i].requestingNodeID == nodeID) {
+            //             requests[i].cancelled = true;
+            //         }
+            //     }
+            // })
         }
+        this.addMessage(msg);
         store.dispatch(poolAction.removeActiveNode({
             key: this.poolKey,
             nodeID: nodeID,
@@ -703,11 +810,9 @@ export class PoolClient {
     // HandleMessage functions
     ////////////////////////////////////////////////////////////////
 
-    handleMessage(msg?: PoolMessage) {
-        if (!msg) return;
-
+    handleMessage(msg: PoolMessage) {
         let pool = this.getPool();
-        if (this.checkMessageDuplicate(msg.msgID, msg.created)) return;
+        if (this.checkMessageDuplicate(msg)) return;
 
         console.log("MSG RECV:", JSON.stringify(msg));
 
@@ -724,7 +829,7 @@ export class PoolClient {
                 switch (msg.type) {
                 case PoolMessageType.GET_LATEST:
                     if (msg.action == PoolMessageAction.REQUEST) {
-                        this.sendRespondGetLatest(msg.src.nodeID, msg.data.messagesOnly, msg.data.lastMessageID);
+                        this.sendRespondGetLatest(msg.src.nodeID, msg.data);
                     } else if (msg.action == PoolMessageAction.REPLY) {
                         this.updateLatest(msg.data);
                     }
@@ -755,11 +860,10 @@ export class PoolClient {
         } else {
             switch (msg.type) {
             case PoolMessageType.SIGNAL_STATUS:
-                let existingNodeID: boolean = this.activeNodes.has(msg.data.nodeID);
-                if (msg.data.state == PoolNodeState.ACTIVE && !existingNodeID) {
-                    this.addActiveNode(msg.data);
-                } else if (msg.data.state == PoolNodeState.INACTIVE && existingNodeID && !this.nodeConnections.get(msg.data.nodeID)) {
-                    this.removeActiveNode(msg.data.nodeID);
+                if (msg.data.state == PoolNodeState.ACTIVE) {
+                    this.addActiveNode(msg);
+                } else if (msg.data.state == PoolNodeState.INACTIVE) {
+                    this.removeActiveNode(msg);
                 } else {
                     return
                 }
@@ -768,17 +872,11 @@ export class PoolClient {
                 if (msg.data == "" || msg.data.length >= pool.PoolSettings.maxTextLength || msg.data.replaceAll(" ", "").replaceAll("&nbsp;", "").replaceAll("<br>", "") == "") {
                     return
                 }
-                store.dispatch(poolAction.addMessage({
-                    key: this.poolKey,
-                    message: msg,
-                } as AddMessageAction));
+                this.addMessage(msg);
                 break;
             case PoolMessageType.FILE:
                 this.availableFiles.set(msg.data.fileID, msg.data.totalSize);
-                store.dispatch(poolAction.addMessage({
-                    key: this.poolKey,
-                    message: msg,
-                } as AddMessageAction));
+                this.addMessage(msg);
                 break;
             default:
                 return
@@ -823,16 +921,26 @@ export class PoolClient {
         // Yeah the cache chunk sizes don't affect it that much, so 1mb cache chunk seems pretty good
 
         // FIRST CACHE:
-        // Same panel: 50,470ms
+        // Same panel, 1 node: 50,470ms
         // 2 nodes, different panel, 1 parent cluster: 124,821ms
         // 8 nodes, all different panel, 1 parent cluster: 247,406ms
         // 26 nodes, 2 levels: 771,152ms
 
         // CACHING IN EFFECT (same travel distance as first cache):
-        // Same panel: 21,146ms
+        // Same panel, 1 node: 21,146ms
         // 2 nodes, different panel, 1 parent cluster: 43,186ms
         // 8 nodes, all different panel, 1 parent cluster: 164,994ms
         // 26 nodes, 2 levels: 490,083ms
+
+        // FIRST CACHE (Webworkers):
+        // Same panel, 1 node: 46,877ms
+        // 2 nodes, different panel, 1 parent cluster: 69,181ms
+        // 26 nodes, 2 levels: 704,035ms
+
+        // CACHING IN EFFECT (Webworkers):
+        // Same panel, 1 node: 21,968ms
+        // 8 nodes, all different panel, 1 parent cluster: 99,866ms
+        // 26 nodes, 2 levels: 392,552ms
 
         // console.log("BINARY MSG RECV:", payload.byteLength, msgID, fileID, chunkNumber, dests);
         // console.log("FORWARD CHUNKNUMBER", chunkNumber)
@@ -840,16 +948,24 @@ export class PoolClient {
         if (dests) {
             let partnerIntPath = getCacheChunkNumber(chunkNumber) % 3;
             let isADest = false;
+            let forwardMessage = true;
+            
+            if (this.checkAtMyDest(dests)) {
+                FileManager.addFileChunk(fileID, chunkNumber, payload);
+                if (dests.length != 0) {
+                    // if (partnerIntPath != this.nodePosition.PartnerInt) console.log("GOT MY FILE CHUNK, SENDING TO DESTS", dests) // Problem, is it's sending to other panels of a partnerInt that is not itself
+                    isADest = true;
+                    data = createBinaryMessage(payload, msgID, fileID, chunkNumber, src, dests);
+                } else {
+                    forwardMessage = false;
+                }
+            }
+
             if (partnerIntPath == this.nodePosition.PartnerInt) {
                 FileManager.cacheFileChunk(fileID, chunkNumber, fileSize, payload)
             }
-            if (this.checkAtMyDest(dests)) {
-                FileManager.addFileChunk(fileID, chunkNumber, payload);
-                if (dests.length == 0) return;
-                // if (partnerIntPath != this.nodePosition.PartnerInt) console.log("GOT MY FILE CHUNK, SENDING TO DESTS", dests) // Problem, is it's sending to other panels of a partnerInt that is not itself
-                isADest = true;
-                data = createBinaryMessage(payload, msgID, fileID, chunkNumber, src, dests);
-            }
+
+            if (!forwardMessage) return;
 
             this.broadcastMessage({
                 msgID: msgID,
@@ -866,7 +982,7 @@ export class PoolClient {
     // Data channel functions
     ////////////////////////////////////////////////////////////////
 
-    broadcastMessage(data: string | DataChannelBufferObject, src: PoolMessageSourceInfo, dests?: PoolMessageDestinationInfo[], isADest: boolean = false, partnerIntPath: number | null = null): boolean {
+    broadcastMessage(data: string | DataChannelBufferObject, src: PoolMessageSourceInfo, dests?: PoolMessageDestinationInfo[], isADest: boolean = false, partnerIntPath: number | null = null) {
         let panelNumber = this.getPanelNumber();
         let sent = false;
 
@@ -895,7 +1011,7 @@ export class PoolClient {
                 }
             }
 
-            if (partnerIntPath != null && sent) return true;
+            if (partnerIntPath != null && sent) return;
 
             let parentClusterDirection: PoolMessageDestinationInfo[][] = [[], [], []]; 
             let childClusterDirection: PoolMessageDestinationInfo[][] = [[], []];
@@ -952,7 +1068,7 @@ export class PoolClient {
             if (partnerIntPath != null) {
                 if (src.nodeID != this.nodeID && partnerIntPath != this.nodePosition.PartnerInt) {
                     // console.log("DIFF PARTNER INT")
-                    return true
+                    return;
                 }
             }
 
@@ -1062,8 +1178,6 @@ export class PoolClient {
                 }
             }
         }
-
-        return sent;
     }
     
     private getDirectionOfMessage(src: PoolMessageSourceInfo): [boolean, boolean] {
@@ -1099,7 +1213,7 @@ export class PoolClient {
             console.log("DATA CHANNEL WITH", targetNodeID, "OPENED");
             this.sendActiveNodeSignal(targetNodeID);
             if (!this.latest) {
-                this.sendGetLatest(targetNodeID, true);
+                this.sendGetLatest(targetNodeID);
             } else if (sentOffer) {
                 let isNeighbourNode = false
                 for (let i = 0; i < 3; i++) {
@@ -1232,13 +1346,13 @@ export class PoolClient {
     // PoolMessage helpers functions
     ////////////////////////////////////////////////////////////////
 
-    private checkMessageDuplicate(msgID: string, created?: number): boolean {
+    private checkMessageDuplicate(msg: PoolMessage): boolean {
         let poolMessageExists: boolean = false;
         for (let i = this.receivedMessages.length - 1; i >= 0; i--) {
-            if (created && this.receivedMessages[i].received < created) {
+            if (msg.created && this.receivedMessages[i].received < msg.created) {
                 break
             } else {
-                if (this.receivedMessages[i].msgID == msgID) {
+                if (this.receivedMessages[i].msgID == msg.msgID) {
                     poolMessageExists = true;
                 }
             }
@@ -1246,7 +1360,7 @@ export class PoolClient {
         if (poolMessageExists) return true
 
         this.receivedMessages.push({
-            msgID: msgID,
+            msgID: msg.msgID,
             received: Date.now(),
         });
         if (this.receivedMessages.length > DEFAULT_RECV_MESSAGES_CACHE) {
@@ -1254,6 +1368,29 @@ export class PoolClient {
         }
 
         return false;
+    }
+
+    private addMessage(message: PoolMessage) {
+        store.dispatch(poolAction.addMessage({
+            key: this.poolKey,
+            message: message,
+        } as AddMessageAction));
+    }
+
+    private addMessages(messages: PoolMessage[]) {
+        for (let i = 0; i < messages.length; i++) {
+            if (!this.checkMessageDuplicate(messages[i])) {
+                if (messages[i].type == PoolMessageType.SIGNAL_STATUS) {
+                    if (messages[i].data.state == PoolNodeState.ACTIVE) {
+                        this.addActiveNode(messages[i]);
+                    } else if (messages[i].data.state == PoolNodeState.INACTIVE) {
+                        this.removeActiveNode(messages[i]);
+                    }
+                } else {
+                    this.addMessage(messages[i]);
+                }
+            }
+        }
     }
 
     private checkAtMyDest(dests: PoolMessageDestinationInfo[]): boolean {
@@ -1288,7 +1425,7 @@ export class PoolClient {
         return dests
     }
 
-    private createMessage(type: PoolMessageType, action: PoolMessageAction, data?: any, destNodeIDs?: string[] | string, partnerIntPath: number | null = null): PoolMessage | undefined {
+    private createMessage(type: PoolMessageType, action: PoolMessageAction, data?: any, destNodeIDs?: string[] | string, partnerIntPath: number | null = null): PoolMessage {
         let src = this.getSrc();
         let dests = destNodeIDs ? this.getDests(destNodeIDs) : undefined;
         return {

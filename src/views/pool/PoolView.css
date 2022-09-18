@@ -19,13 +19,13 @@ textarea {
     word-wrap: break-word;
     overflow-x: hidden;
     overflow-y: scroll;
+    gap: 20px;
     padding: 0px 40px;
 }
 
 .pool-message-container {
     display: flex;
     flex-direction: column;
-    padding: 15px 0px;
 }
 
 .pool-message-data-container {
@@ -38,6 +38,7 @@ textarea {
     flex-direction: row;
     align-items: center;
     height: 20px;
+    margin-top: 5px;
     margin-bottom: 5px;
 }
 
@@ -99,14 +100,20 @@ textarea {
     justify-content: center;
     align-items: center;
     font-size: 12px;
-    padding: 8px;
+    color: var(--text-color-greyed);
+}
+
+.pool-message-node-status {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 12px;
     border-radius: 5px;
-    margin: 10px;
     color: var(--text-color-greyed);
 }
 
 .pool-start-spacer {
-    margin-top: 20px;
+    margin-top: 40px;
 }
 
 
