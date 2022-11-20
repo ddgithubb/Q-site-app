@@ -1,4 +1,5 @@
-import { CacheChunkMapData, CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR } from "./pool-file-manager";
+import { CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR, CACHE_CHUNK_SIZE } from "../config/caching";
+import { CacheChunkMapData } from "./pool-file-manager";
 import { PoolChunkRange } from "./pool.model";
 
 export function compactChunkRanges(chunksRange: PoolChunkRange[]) {
@@ -17,17 +18,21 @@ export function compactChunkRanges(chunksRange: PoolChunkRange[]) {
     }
 }
 
-export function getCacheChunkNumber(chunkNumber: number) {
+export function getCacheChunkNumberFromChunkNumber(chunkNumber: number) {
     return Math.trunc(chunkNumber / CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR);
 }
 
+export function getCacheChunkNumberFromByteSize(byteSize: number) {
+    return Math.trunc(byteSize / CACHE_CHUNK_SIZE);
+}
+
 // https://stackoverflow.com/questions/22697936/binary-search-in-javascript
-export function searchPosInCacheChunkMapData(ar: CacheChunkMapData, el: number) {
+export function searchPosInCacheChunkMapData(cacheChunkMapData: CacheChunkMapData, cacheChunkNumber: number) {
     var m = 0;
-    var n = ar.length - 1;
+    var n = cacheChunkMapData.length - 1;
     while (m <= n) {
         var k = (n + m) >> 1;
-        var cmp = el - ar[k].cacheChunkNumber;
+        var cmp = cacheChunkNumber - cacheChunkMapData[k].cacheChunkNumber;
         if (cmp > 0) {
             m = k + 1;
         } else if(cmp < 0) {

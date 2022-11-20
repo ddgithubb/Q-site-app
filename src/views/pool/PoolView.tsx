@@ -14,9 +14,12 @@ import SettingsIcon from '../../assets/settings.png';
 import DisconnectIcon from '../../assets/disconnect.png';
 import AddIcon from '../../assets/add.png';
 import DisconnectedIcon from '../../assets/disconnected.png';
+import ImageIcon from '../../assets/image.png';
+import DownloadIcon from '../../assets/download.png';
 import { fileSizeToString } from '../../helpers/file-size';
-import { PoolManager } from '../../pool/global';
+import { FileManager, PoolManager } from '../../pool/global';
 import { CircularProgressbar } from 'react-circular-progressbar';
+import { FILE_PICKER_OPTS } from '../../config/file-picker';
 
 enum MessageMode {
     DISCONNECT,
@@ -33,14 +36,37 @@ interface ActionBarButtonProps {
     mode: MessageMode;
 }
 
-export function PoolView() {
-
+export function PoolContainerView() {
     const navigate = useNavigate();
     const { poolID } = useParams();
+    const [ poolKey, setPoolKey ] = useState<number>(0);
+
+    useEffect(() => {
+        let pools = getStoreState().pool.pools;
+        if (!poolID) {
+            navigate('/pool');
+            return;
+        }
+        for (const pool of pools) {
+            if (pool.PoolID == poolID) {
+                setPoolKey(pool.key);
+                PoolManager.connectToPool(poolID, poolKey);
+                return;
+            }
+        }
+        navigate('/pool');
+    }, [])
+
+    if (!poolID && !poolKey) {
+        return null
+    } else {
+        return <PoolView poolID={poolID!} poolKey={poolKey} />
+    }
+}
+
+export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number }) {
 
     const [ messageMode, setMessageMode ] = useState<MessageMode>(MessageMode.TEXT);
-
-    const [ poolKey, setPoolKey ] = useState<number>(0);
     const pool = useSelector((state: GlobalState) => state.pool.pools.at(poolKey));
     const poolUsers = useMemo(() => {
         if (!pool) return new Map<string, PoolUser>;
@@ -65,25 +91,9 @@ export function PoolView() {
     const enterKeyDown = useRef<boolean>(false);
 
     useEffect(() => {
-        let pools = getStoreState().pool.pools;
-        if (!poolID) {
-            navigate('/pool');
-            return;
-        }
-        for (const pool of pools) {
-            if (pool.PoolID == poolID) {
-                setPoolKey(pool.key);
-                PoolManager.connectToPool(poolID, poolKey);
-                return;
-            }
-        }
-        navigate('/pool');
-    }, [])
-
-    useEffect(() => {
         if (!pool || !messagesElement) return;
         if (atNewestMessage) {
-            messagesElement?.scrollTo({ top: messagesElement.scrollHeight, behavior: "smooth" })
+            messagesElement?.scrollTo({ top: messagesElement.scrollHeight + 1000, behavior: "auto" })
         } else {
             let deltaY = 0;
             if (!messagesElement?.contains(lastLastMessageElement.current || null)) {
@@ -102,6 +112,7 @@ export function PoolView() {
     }, [pool?.messages])
 
     const onMessagesScroll = (e: React.UIEvent<HTMLDivElement, UIEvent>) => {
+        //console.log("SCROLLING", e)
         if (e.currentTarget.scrollTop + e.currentTarget.offsetHeight + 10 >= e.currentTarget.scrollHeight) {
             if (!atNewestMessage) {
                 setAtNewestMessage(true);
@@ -114,26 +125,52 @@ export function PoolView() {
     }
 
     const sendTextMessage = () => {
-        if (!textAreaElement || !poolID) return;
+        if (!textAreaElement) return;
+        if (textAreaElement.innerHTML == "") return;
         PoolManager.sendTextMessageToPool(poolID, textAreaElement.innerHTML)
         cachedTextMessage.current = "";
         textAreaElement.innerHTML = "";
     }
 
     const addFile = () => {
+        // if (FileManager.fileSystemAccess) {
+        //     window.showOpenFilePicker(FILE_PICKER_OPTS).then(async (fsfh) => {
+        //         for (let i = 0; i < fsfh.length; i++) {
+        //             let file = await fsfh[i].getFile();
+        //             if (!poolID) return;
+        //             PoolManager.sendFileOfferToPool(poolID, file, fsfh[i]);
+        //         }
+        //     });
+        //     return;
+        // }
         document.getElementById("display-file-input")?.click();
     }
 
+    const addImage = () => {
+        document.getElementById("display-image-input")?.click();
+    }
+
     const sendFileOffer = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (!e.target.files || !poolID) return;
+        if (!e.target.files) return;
         for (let i = 0; i < e.target.files.length; i++) {
             PoolManager.sendFileOfferToPool(poolID, e.target.files[i]);
-        }   
+        }
     }
 
     const requestFile = (poolFileInfo: PoolFileInfo) => {
-        if (!poolID) return;
         PoolManager.sendRequestFileToPool(poolID, poolFileInfo);
+    }
+
+    const sendImageOffer = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files) return;
+        for (let i = 0; i < e.target.files.length; i++) {
+            PoolManager.sendImageOfferToPool(poolID, e.target.files[i]);
+        }
+    }
+
+    const requestImage = (poolInfo: PoolFileInfo) => {
+        if (FileManager.hasFileDownload(poolInfo.fileID)) return;
+        PoolManager.sendRequestFileToPool(poolID, poolInfo, true);
     }
 
     const textAreaKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -225,13 +262,36 @@ export function PoolView() {
                                         </div>
                                     </div>
                                 ) : msg.type == PoolMessageType.IMAGE ? (
-                                    <></>
+                                    <>
+                                        <div className="pool-message-image-container">
+                                            <div className="pool-message-image-sub-container">
+                                                <img loading="lazy" className={"pool-message-image" + (!FileManager.hasMediaCache(msg.data.fileInfo.fileID) ? " pool-message-image-preview-blur" : "")} src={FileManager.getMediaCache(msg.data.fileInfo.fileID) || msg.data.previewImage} height={Math.min(400, (msg.data.height / msg.data.width) * Math.min(400, msg.data.width))} />
+                                                {
+                                                    !FileManager.hasMediaCache(msg.data.fileInfo.fileID) ? (
+                                                        <div className="pool-message-image-missing-container" onClick={() => requestImage(msg.data.fileInfo)}>
+                                                            {FileManager.hasFileDownload(msg.data.fileInfo.fileID) ? "Requesting..." : "Request Image"}
+                                                        </div>
+                                                    ) : undefined
+                                                }
+                                            </div>
+                                        </div>
+                                        {
+                                            FileManager.hasMediaCache(msg.data.fileInfo.fileID) ? (
+                                                <div className="pool-message-image-download-container">
+                                                    <img className="pool-message-image-download-icon" src={DownloadIcon} />
+                                                    <div className="pool-message-image-download-filename" onClick={() => requestFile(msg.data.fileInfo)}>
+                                                        {msg.data.fileInfo.fileName} {" (" + fileSizeToString(msg.data.fileInfo.totalSize) + ")"}
+                                                    </div>
+                                                </div>
+                                            ) : undefined
+                                        }
+                                    </>
                                 ) : undefined
                             }
                         </div>
                     ))
                 }
-                <div className="pool-start-spacer" />
+                <div className="pool-end-spacer" />
             </div>
             <div className="display-container">
                 <div className="display-overlay-container">
@@ -245,13 +305,13 @@ export function PoolView() {
                             </div>
                         </motion.div> */}
                         {
-                            pool?.downloadQueue.map((fileInfo) => (
-                                <motion.div key={fileInfo.fileID} className="display-downloading-file" whileHover={{ maxWidth: "500px", transition: { duration: 0.1 } }}>
+                            pool?.downloadQueue.map((fileProgress) => (
+                                <motion.div key={fileProgress.fileID} className="display-downloading-file" whileHover={{ maxWidth: "500px", transition: { duration: 0.1 } }}>
                                     <div className="display-downloading-file-progress">
-                                        <CircularProgressbar value={fileInfo.downloadProgress || 0} strokeWidth={15} /> 
+                                        <CircularProgressbar value={fileProgress.progress} strokeWidth={15} /> 
                                     </div>
                                     <div className="display-downloading-file-name">
-                                        {fileInfo.fileName}
+                                        {fileProgress.fileName}
                                     </div>
                                 </motion.div>
                             ))
@@ -288,7 +348,7 @@ export function PoolView() {
                 </div>
                 {
                     messageMode == MessageMode.TEXT ? (
-                        <>
+                        <div className="display-message-input">
                             <div 
                                 className="display-text-input" 
                                 data-placeholder='Send Text Message' 
@@ -300,7 +360,10 @@ export function PoolView() {
                                 dangerouslySetInnerHTML={{ __html: cachedTextMessage.current }}
                                 spellCheck="false"
                             />
-                        </>
+                            <div className="display-message-input-icons">
+                                <img className="display-message-input-icon" src={ImageIcon} onClick={addImage} />
+                            </div>
+                        </div>
                     ) : messageMode == MessageMode.FILE ? (
                         <div className="display-files-container">
                             <motion.div className="display-file-container" whileHover={{ backgroundColor: "rgba(255, 255, 255, 0.05)", transition: { duration: 0.1 } }} onClick={addFile}>
@@ -320,7 +383,8 @@ export function PoolView() {
                         </div>
                     ) : null
                 }
-                <input id="display-file-input" type="file" onChange={sendFileOffer} />
+                <input className="hideInput" id="display-file-input" type="file" onChange={sendFileOffer} />
+                <input className="hideInput" id="display-image-input" type="file" accept=".png,.jpg" onChange={sendImageOffer} />
             </div>
             <motion.div 
                 className="action-bar" 

@@ -1,25 +1,21 @@
 import { nanoid } from "nanoid";
 import { fileSizeToString, kibibytesToBytes, mebibytesToBytes } from "../helpers/file-size";
-import { poolAction, RemoveDownloadAction, UpdateDownloadProgressAction } from "../store/slices/pool.slice";
+import { poolAction, RemoveDownloadAction, SetMediaURLAction, UpdateDownloadProgressAction } from "../store/slices/pool.slice";
 import { getStoreState, store } from "../store/store";
 import { PoolManager } from "./global";
-import { getCacheChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
+import { getCacheChunkNumberFromChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
 import { PoolChunkRange, PoolFileInfo, PoolFileRequest, PoolNode } from "./pool.model";
 // @ts-expect-error
 import PoolWorker from 'worker-loader!./pool.worker.js'
+import { CACHE_CHUNK_SIZE, CHUNK_SIZE, CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR } from "../config/caching";
+import { verifyFileHandlePermission } from "../helpers/file-exists";
+import { APP_TYPE } from "../config/env";
 
 const WebworkerPromise = require('webworker-promise');
 const worker = new WebworkerPromise(new PoolWorker());
 
-export const CHUNK_SIZE = kibibytesToBytes(16);
-//export const CACHE_CHUNK_SIZE = kibibytesToBytes(128);
-export const CACHE_CHUNK_SIZE = mebibytesToBytes(1);
-//const chunkSize = mebibytesToBytes(1);
-export const CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR = CACHE_CHUNK_SIZE / CHUNK_SIZE;
-
-interface FileOffer {
+export interface FileOffer extends PoolFileInfo {
     file: File;
-    retracted: boolean;
 }
 
 interface FileDownload {
@@ -31,6 +27,7 @@ interface FileDownload {
     totalChunks: number;
     chunksDownloaded: number;
     chunksDownloadedMap: boolean[];
+    isMedia: boolean;
     directoryHandle?: FileSystemDirectoryHandle;
     fileHandle?: FileSystemFileHandle;
     fileStream?: FileSystemWritableFileStream;
@@ -44,6 +41,11 @@ interface CacheChunk {
     chunks: ArrayBuffer[];
 }
 
+interface MediaCacheInfo {
+    fileID: string;
+    size: number;
+}
+
 export type CacheChunkMapData = CacheChunkData[];
 
 export interface CacheChunkData {
@@ -55,14 +57,18 @@ export class FileManagerClass {
     fileSystemAccess: boolean;
     downloadLink?: HTMLAnchorElement;
     currentFileDownloadSize: number; // size of fileDownloads and fileStore
-    fileOffers: Map<string, Map<string, FileOffer>>; // key: PoolID, key: fileID
+    private fileOffers: Map<string, Map<string, FileOffer>>; // key: PoolID, key: fileID
     fileDownloads: Map<string, FileDownload>; // key: fileID
     fileDownloadTimer: NodeJS.Timer | undefined;
     fileCacheChunks: Map<string, CacheChunk>; // key: fileID
     cacheChunkMapDataFlushTimer: NodeJS.Timer | undefined;
     cacheChunkQueue: string[]; // value: cache key
     cacheChunkMap: Map<string, CacheChunkMapData>; // key: fileID
-    maxCacheChunkSize: number;
+    maxCacheChunkCount: number;
+    mediaCacheObjectURL: Map<string, string>; // key: fileID
+    mediaCacheQueue: MediaCacheInfo[];
+    curMediaCacheSize: number;
+    maxMediaCacheSize: number;
     private webworker: any;
 
     constructor() {
@@ -82,12 +88,15 @@ export class FileManagerClass {
         this.cacheChunkQueue = [];
         this.cacheChunkMap = new Map<string, CacheChunkMapData>;
         this.webworker = worker;
-        this.maxCacheChunkSize = store.getState().setting.storageSettings.maxCacheChunkSize / CACHE_CHUNK_SIZE;
-        this.getObjectStore();
+        this.maxCacheChunkCount = store.getState().setting.storageSettings.maxCacheChunkSize / CACHE_CHUNK_SIZE;
+        this.mediaCacheObjectURL = new Map<string, string>;
+        this.mediaCacheQueue = [];
+        this.curMediaCacheSize = 0;
+        this.maxMediaCacheSize = store.getState().setting.storageSettings.maxMediaCacheSize;
     }
 
-    private getObjectStore() {
-        this.webworker.exec('initDB');
+    init(): Promise<boolean> {
+        return this.webworker.exec('initDB');
     } 
 
     private startCacheChunksFlushTimer() {
@@ -116,10 +125,10 @@ export class FileManagerClass {
                 return;
             }
             this.fileDownloads.forEach((fileDownload, fileID) => {
-                if (fileDownload.chunksDownloaded == 0) return;
+                // if (fileDownload.chunksDownloaded == 0) return;
                 if (Date.now() >= fileDownload.lastModified + 5000) {
                     console.log("5 SECONDS NO CHUNKS INTERVAL")
-                    let chunksMissing: number[][] = []; 
+                    let chunksMissing: number[][] = [];
                     let curRange: number[] | undefined = undefined;
                     for (let i = 0; i < fileDownload.chunksDownloadedMap.length; i++) {
                         if (!fileDownload.chunksDownloadedMap[i]) {
@@ -138,7 +147,7 @@ export class FileManagerClass {
                     }
                     if (chunksMissing.length != 0) {
                         console.log("CHUNKS MISSING:", chunksMissing);
-                        PoolManager.sendRequestFileToPool(fileDownload.poolID, fileDownload.poolFileInfo, chunksMissing);
+                        PoolManager.sendRequestFileToPool(fileDownload.poolID, fileDownload.poolFileInfo, fileDownload.isMedia, chunksMissing);
                     }
                 }
             });
@@ -167,26 +176,108 @@ export class FileManagerClass {
         return true;
     }
 
-    addFileOffer(poolID: string, fileID: string, file: File): boolean {
-        if (file.size == 0) return false;
-        let poolFileOffer = this.fileOffers.get(poolID);
-        if (!poolFileOffer) {
-            poolFileOffer = new Map<string, FileOffer>;
-        }
-        poolFileOffer.set(fileID, {
-            file: file,
-            retracted: false,
-        } as FileOffer);
-        this.fileOffers.set(poolID, poolFileOffer);
-        return true;
+    initPoolFileOffers(poolID: string): Promise<void> {
+        if (APP_TYPE == 'desktop' || this.fileOffers.has(poolID)) return Promise.resolve();
+        return this.webworker.exec('getPoolFileOffers', poolID).then(async (fileOffers: FileOffer[]) => {
+            let poolFileOffers = this.fileOffers.get(poolID);
+            if (!poolFileOffers) {
+                poolFileOffers = new Map<string, FileOffer>;
+                this.fileOffers.set(poolID, poolFileOffers);
+            }
+            //let updatedFileOffers = false;
+            for (let i = fileOffers.length - 1; i >= 0; i--) {
+                // if (fileOffers[i].fileHandle == undefined) continue; // SHOULD NEVER HAPPEN
+                // let granted = await verifyFileHandlePermission(fileOffers[i].fileHandle!);
+                // if (!granted) {
+                //     fileOffers.splice(i, 1);
+                //     updatedFileOffers = true;
+                //     continue;
+                // }
+                poolFileOffers.set(fileOffers[i].fileID, fileOffers[i]);
+            }
+            // if (updatedFileOffers) {
+            //     this.webworker.exec('updatePoolFileOffer', {
+            //         poolID: poolID,
+            //         fileOffers: fileOffers,
+            //     })
+            // }
+            return;
+        })
     }
 
-    async addFileDownload(poolID: string, poolKey: number, poolFileInfo: PoolFileInfo): Promise<boolean> {
+    addFileOffer(poolID: string, fileInfo: PoolFileInfo, file: File): boolean {
+        if (file.size == 0) return false;
+        let poolFileOffers = this.fileOffers.get(poolID);
+        if (!poolFileOffers) {
+            poolFileOffers = new Map<string, FileOffer>;
+            this.fileOffers.set(poolID, poolFileOffers);
+        }
+        if (!poolFileOffers.has(fileInfo.fileID)) {
+            let fileOffer: FileOffer = {
+                ...fileInfo,
+                file: file,
+            };
+            poolFileOffers.set(fileInfo.fileID, fileOffer);
+            if (APP_TYPE == 'desktop') {
+                this.webworker.exec('addPoolFileOffer', {
+                    poolID: poolID,
+                    fileOffer: fileOffer,
+                });
+            }
+            return true;
+        }
+        return false;
+    }
+
+    hasFileOffer(poolID: string, fileID: string): boolean {
+        let poolFileOffers = this.fileOffers.get(poolID);
+        if (!poolFileOffers) return false;
+        return poolFileOffers.has(fileID);
+    }
+
+    getFileOffer(poolID: string, fileID: string): FileOffer | undefined {
+        let poolFileOffers = this.fileOffers.get(poolID);
+        if (!poolFileOffers) return undefined;
+        return poolFileOffers.get(fileID);
+    }
+
+    removeFileoffer(poolID: string, fileID: string) {
+        let poolFileOffers = this.fileOffers.get(poolID);
+        if (!poolFileOffers) return;
+        let fileOffer = poolFileOffers.get(fileID);
+        if (!fileOffer) return;
+        poolFileOffers.delete(fileID);
+        if (APP_TYPE == 'desktop') {
+            this.webworker.exec('removePoolFileOffer', {
+                poolID: poolID,
+                fileID: fileID,
+            });
+        }
+    }
+
+    getFileOffers(poolID: string): FileOffer[] | undefined  {
+        let poolFileOffers = this.fileOffers.get(poolID);
+        if (!poolFileOffers) return undefined;
+        return Array.from(poolFileOffers.values());
+    }
+
+    getFileDownloadProgress(fileID: string): number {
+        let fileDownload = this.fileDownloads.get(fileID);
+        if (!fileDownload) return 0;
+        return fileDownload.chunksDownloaded / fileDownload.totalChunks;
+    }
+
+    hasFileDownload(fileID: string) {
+        return this.fileDownloads.has(fileID);
+    }
+
+    async addFileDownload(poolID: string, poolKey: number, poolFileInfo: PoolFileInfo, isMedia: boolean): Promise<boolean> {
         if (!this.checkFileSizeLimit(poolFileInfo.totalSize)) return false;
+        if (this.fileDownloads.has(poolFileInfo.fileID)) return true;
         let directoryHandle = undefined;
         let fileHandle = undefined;
         let fileStream = undefined;
-        if (this.fileSystemAccess) {
+        if (!isMedia && this.fileSystemAccess) {
             try {
                 directoryHandle = await window.showDirectoryPicker({
                     id: "default_export_folder",
@@ -217,6 +308,7 @@ export class FileManagerClass {
             chunksDownloaded: 0,
             chunksDownloadedMap: chunksDownloadedMap,
             directoryHandle: directoryHandle,
+            isMedia: isMedia,
             fileHandle: fileHandle,
             fileStream: fileStream,
             memoryChunks: fileStream ? undefined : new Uint8Array(poolFileInfo.totalSize),
@@ -230,12 +322,14 @@ export class FileManagerClass {
         let fileDownload = this.fileDownloads.get(fileID);
         if (!fileDownload) return;
         if (fileDownload.chunksDownloadedMap[chunkNumber] == true) {
-            // console.log("ALREADY RECEIVED", chunkNumber);
+            console.log("ALREADY RECEIVED", chunkNumber);
             return;
         }
 
+        //console.log("ADDING FILE CHUNK", chunkNumber);
+
         let offset = chunkNumber * CHUNK_SIZE
-        if (this.fileSystemAccess) {
+        if (!fileDownload.isMedia && this.fileSystemAccess) {
             fileDownload.fileStream?.write({ type: "write", position: offset, data: binaryData }).catch((e) => {
                 console.log(e);
                 this.completeFileDownload(fileID)
@@ -268,9 +362,14 @@ export class FileManagerClass {
         let fileDownload = this.fileDownloads.get(fileID);
         if (!fileDownload) return;
         console.log(fileDownload, Date.now())
-        if (this.fileSystemAccess) {
+        if (!fileDownload.isMedia && this.fileSystemAccess) {
             if (fileDownload.chunksDownloaded == fileDownload.totalChunks) {
-                fileDownload.fileStream?.close();
+                fileDownload.fileStream?.close().then(() => {            
+                    fileDownload?.fileHandle?.getFile().then((file) => {
+                        if (!fileDownload) return;
+                        PoolManager.sendFileOfferToPool(fileDownload.poolID, file, fileDownload.poolFileInfo.fileID, fileDownload.poolFileInfo.originNodeID);
+                    });
+                });
             } else {
                 if (fileDownload.fileHandle) {
                     fileDownload.directoryHandle?.removeEntry(fileDownload.fileHandle?.name);
@@ -281,7 +380,12 @@ export class FileManagerClass {
             if (!fileDownload.memoryChunks) return;
             this.currentFileDownloadSize -= fileDownload.poolFileInfo.totalSize;
             if (fileDownload.chunksDownloaded == fileDownload.totalChunks) {
-                this.downloadFile(fileDownload.poolFileInfo.fileName, new Blob([fileDownload.memoryChunks]));
+                let blob = new Blob([fileDownload.memoryChunks]);
+                if (fileDownload.isMedia) {
+                    this.addMediaCache(fileID, blob);
+                } else {
+                    this.downloadFile(fileDownload.poolFileInfo.fileName, blob);
+                }
             }
             fileDownload.memoryChunks = undefined;
         }
@@ -291,13 +395,10 @@ export class FileManagerClass {
         }
 
         store.dispatch(poolAction.removeDownload({
-            key: fileDownload.poolKey,
-            fileID: fileDownload.poolFileInfo.fileID,
+            key: fileDownload!.poolKey,
+            fileID: fileDownload!.poolFileInfo.fileID,
         } as RemoveDownloadAction))
-        let dq = getStoreState().pool.pools[fileDownload.poolKey].downloadQueue; 
-        if (dq.length > 0) {
-            PoolManager.sendRequestFileToPool(fileDownload.poolID, dq[0], undefined, true);
-        }
+        PoolManager.completeFileDownload(fileDownload.poolID, fileDownload.poolFileInfo.fileID);
         
         this.fileDownloads.delete(fileID);
     }
@@ -305,7 +406,7 @@ export class FileManagerClass {
     cacheFileChunk(fileID: string, chunkNumber: number, totalSize: number, chunk: ArrayBuffer) {
         if (!this.cacheChunkMapDataFlushTimer) this.startCacheChunksFlushTimer();
 
-        let cacheChunkNumber = getCacheChunkNumber(chunkNumber);
+        let cacheChunkNumber = getCacheChunkNumberFromChunkNumber(chunkNumber);
         let cacheChunk = this.fileCacheChunks.get(fileID);
         if (!cacheChunk) {
             cacheChunk = {
@@ -369,17 +470,10 @@ export class FileManagerClass {
         this.cacheChunkQueue.push(key);
 
         let deleteKey: string | undefined = undefined;
-        if (this.cacheChunkQueue.length > this.maxCacheChunkSize) {
+        if (this.cacheChunkQueue.length > this.maxCacheChunkCount) {
             deleteKey = this.cacheChunkQueue.shift();
             if (deleteKey != undefined && deleteKey != "") {
-                let split = deleteKey.split(':');
-                let data = this.cacheChunkMap.get(split[2]);
-                if (data) {
-                    let pos = searchPosInCacheChunkMapData(data, parseInt(split[1]));
-                    if (pos >= 0) {
-                        data.splice(pos, 1);
-                    }
-                }
+                this.deleteKeyFromCacheChunkMap(deleteKey);
             }
             console.log("DELETING CACHE CHUNK KEY:", deleteKey);
         }
@@ -391,11 +485,50 @@ export class FileManagerClass {
         }, cacheChunk.chunks);
     }
 
-    getCacheChunk(key: string): Promise<ArrayBuffer[]> {
-        return this.webworker.exec('getCacheChunk', key);
+    deleteKeyFromCacheChunkMap(key: string) {
+        let split = key.split(':');
+        let data = this.cacheChunkMap.get(split[2]);
+        if (data) {
+            let pos = searchPosInCacheChunkMapData(data, parseInt(split[1]));
+            if (pos >= 0) {
+                data.splice(pos, 1);
+            }
+        }
     }
 
-    removeFileoffer() {
-        // remember to mark retracted?: boolean
+    getCacheChunk(key: string): Promise<ArrayBuffer[]> {
+        return this.webworker.exec('getCacheChunk', key).then((ab: any) => {
+            if (!ab) {
+                this.deleteKeyFromCacheChunkMap(key);
+            }
+            return ab;
+        });
+    }
+
+    addMediaCache(fileID: string, blob: Blob) {
+        this.mediaCacheObjectURL.set(fileID, URL.createObjectURL(blob));
+        this.mediaCacheQueue.push({
+            fileID: fileID,
+            size: blob.size,
+        } as MediaCacheInfo);
+        this.curMediaCacheSize += blob.size;
+
+        if (this.curMediaCacheSize > this.maxMediaCacheSize) {
+            let mediaCacheInfo = this.mediaCacheQueue.shift();
+            if (!mediaCacheInfo) return;
+            let url = this.mediaCacheObjectURL.get(mediaCacheInfo.fileID);
+            if (!url) return;
+            URL.revokeObjectURL(url);
+            this.mediaCacheObjectURL.delete(mediaCacheInfo.fileID);
+            this.curMediaCacheSize -= mediaCacheInfo.size;
+        }
+    }
+
+    getMediaCache(fileID: string): string | undefined {
+        return this.mediaCacheObjectURL.get(fileID);
+    }
+
+    hasMediaCache(fileID: string): boolean {
+        return this.mediaCacheObjectURL.has(fileID);
     }
 }

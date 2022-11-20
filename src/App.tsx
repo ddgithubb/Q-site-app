@@ -4,9 +4,10 @@ import { PoolInfo, PoolUser } from './pool/pool.model'
 import { poolAction } from './store/slices/pool.slice'
 import { getStoreState, store } from './store/store'
 import { BrowserRouter, Route, Routes } from "react-router-dom"
-import { PoolView } from './views/pool/PoolView'
+import { PoolContainerView, PoolView } from './views/pool/PoolView'
 import { Pools } from './views/pool/Pools'
 import { mebibytesToBytes } from './helpers/file-size'
+import { FileManager } from './pool/global'
 
 const dispatch = store.dispatch
 dispatch(poolAction.initPools([
@@ -19,26 +20,38 @@ dispatch(poolAction.initPools([
     } ],
     Settings: {
       maxTextLength: 5000,
-      maxMediaSize: mebibytesToBytes(10),
+      maxMediaSize: mebibytesToBytes(32),
     }
   } as PoolInfo
 ]))
 
 function App() {
 
-  useEffect(() => {
+  const [ gateOpen, setGateOpen ] = useState<boolean>(false);
 
+  useEffect(() => {
+    let initFunc = async () => {
+      await FileManager.init();
+      setGateOpen(true);
+    }
+    initFunc();
   }, [])
 
+  // useEffect(() => {
+  //   console.log(gateOpen);
+  // }, [gateOpen]);
+
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={ <Pools /> } /> 
-        <Route path="/pool" element={ <Pools /> }>
-          <Route path=":poolID" element={ <PoolView /> } />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    gateOpen ? (
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={ <Pools /> } /> 
+          <Route path="/pool" element={ <Pools /> }>
+            <Route path=":poolID" element={ <PoolContainerView /> } />
+          </Route>
+        </Routes>
+      </BrowserRouter>  
+    ) : null
   );
 }
 

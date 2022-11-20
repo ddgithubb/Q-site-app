@@ -9,10 +9,10 @@ export enum PoolMessageType {
     SIGNAL_STATUS,
     GET_LATEST,
     RETRACT_MESSAGE,
-    ANNOUNCEMENT,
     TEXT,
     FILE,
     IMAGE,
+    REQUEST_MEDIA_HINT,
 }
 
 export enum PoolMessageAction {
@@ -31,6 +31,12 @@ export enum PoolConnectionState {
     CONNECTED,
     CONNECTING,
     RECONNECTING,
+}
+
+export enum PoolDownloadProgressStatus {
+    DOWNLOADING,
+    RETRYING,
+    UNAVAILABLE,
 }
 
 export interface PoolMessage {
@@ -54,6 +60,7 @@ export interface PoolMessageSourceInfo {
 export interface PoolMessageDestinationInfo {
     nodeID: string;
     lastSeenPath: number[];
+    visited: boolean;
 }
 
 export interface PoolMessageInfo {
@@ -78,7 +85,7 @@ export interface Pool {
     connectionState: PoolConnectionState;
     myNode: PoolNode;
     activeNodes: PoolNode[];
-    downloadQueue: PoolFileInfo[];
+    downloadQueue: PoolFileProgress[];
     messages: PoolMessage[];
 }
 
@@ -119,37 +126,45 @@ export interface PoolUpdateNodeState {
 export interface PoolFileInfo {
     fileID: string;
     nodeID: string;
+    originNodeID: string;
     fileName: string;
     totalSize: number;
-    downloadProgress?: number;
+}
+
+export interface PoolFileProgress extends PoolFileInfo {
+    progress: number;
+    status: PoolDownloadProgressStatus;
 }
 
 export type PoolChunkRange = number[];
 
 export interface PoolFileRequest {
     fileID: string;
-    requestFromOrigin: boolean;
     requestingNodeID: string;
     chunksMissing: PoolChunkRange[];
     cacheChunksCovered: number[];
-    startChunkNumber?: number;
-    wrappedAround?: boolean;
-    nextChunkNumber?: number;
-    chunksMissingRangeNumber?: number;
-    cacheChunksSet?: Set<number>;
-    cancelled?: boolean;
 }
 
-export interface PoolImageInfo {
+export interface PoolMediaInfo {
     fileInfo: PoolFileInfo;
     extension: string;
+}
+
+export interface PoolImageInfo extends PoolMediaInfo {
     width: number;
     height: number;
     previewImage: string;
-    imageUrl?: string;
+}
+
+export interface PoolRequestMediaHint {
+    fileInfo: PoolFileInfo;
 }
 
 export interface PoolRetractMessage {
     type: PoolMessageType;
     id: string; // msgID or fileID
+}
+
+export function isMediaType(type: PoolMessageType): boolean {
+    return type == PoolMessageType.IMAGE;
 }

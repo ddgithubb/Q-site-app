@@ -1,10 +1,11 @@
 import { HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TIMEOUT_SECONDS, WSHOST } from "../config/http";
 import { SSLwtMessage, SSMessage } from "./sync-server.model";
 import { PoolClient } from "./pool-client";
-import { FILE_ID_LENGTH, Pool, PoolConnectionState, PoolFileInfo, PoolMessageDestinationInfo } from "./pool.model";
+import { FILE_ID_LENGTH, Pool, PoolConnectionState, PoolFileInfo, PoolImageInfo, PoolMessageDestinationInfo } from "./pool.model";
 import { store } from "../store/store";
 import { poolAction, UpdateConnectionStateAction } from "../store/slices/pool.slice";
 import { initializePool } from "./sync-server-client";
+import { FileManager } from "./global";
 
 declare global {
     interface Window { MainPoolClient: PoolClient; }
@@ -23,7 +24,10 @@ export class PoolManagerClass {
             key: poolKey,
             state: PoolConnectionState.CONNECTING,
         } as UpdateConnectionStateAction));
-        this.connectedPools.set(poolID, initializePool(poolID, poolKey));
+        FileManager.initPoolFileOffers(poolID).then(() => {
+            if (this.connectedPools.has(poolID)) return;
+            this.connectedPools.set(poolID, initializePool(poolID, poolKey));
+        });
         return true;
     }
 
@@ -58,17 +62,31 @@ export class PoolManagerClass {
         return true;
     }
 
-    sendFileOfferToPool(poolID: string, file: File): boolean {
+    sendFileOfferToPool(poolID: string, file: File, fileID?: string, originNodeID?: string): boolean {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
-        poolClient.sendFileOffer(file);
+        poolClient.sendFileOffer(file, fileID, originNodeID);
         return true;
     }
 
-    async sendRequestFileToPool(poolID: string, poolFileInfo: PoolFileInfo, chunksMissing?: number[][], inQueue: boolean = false): Promise<boolean> {
+    sendRequestFileToPool(poolID: string, poolFileInfo: PoolFileInfo, isMedia: boolean = false, chunksMissing: number[][] = []): boolean {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
-        await poolClient.sendRequestFile(poolFileInfo, chunksMissing, inQueue);
+        poolClient.sendRequestFile(poolFileInfo, isMedia, chunksMissing);
+        return true;
+    }
+    
+    sendImageOfferToPool(poolID: string, file: File): boolean {
+        let poolClient = this.connectedPools.get(poolID);
+        if (!poolClient) return false;
+        poolClient.sendImageOffer(file);
+        return true;
+    }
+
+    completeFileDownload(poolID: string, fileID: string): boolean {
+        let poolClient = this.connectedPools.get(poolID);
+        if (!poolClient) return false;
+        poolClient.completeFileDownload(fileID);
         return true;
     }
 }

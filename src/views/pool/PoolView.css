@@ -112,8 +112,69 @@ textarea {
     color: var(--text-color-greyed);
 }
 
+.pool-message-image-container {
+    display: flex;
+    flex-direction: row;
+    margin-top: 10px;
+}
+
+.pool-message-image-download-container {
+    display: flex;
+    align-items: center;
+    margin-top: 5px;
+    cursor: pointer;
+}
+
+.pool-message-image-download-icon {
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+    margin-right: 10px;
+}
+
+.pool-message-image-download-filename {
+    font-size: 14px;
+}
+
+.pool-message-image-download-filename:hover {
+    text-decoration: underline;
+}
+
+.pool-message-image-sub-container {
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pool-message-image {
+    max-width: 400px;
+    max-height: 400px;
+}
+
+.pool-message-image-missing-container {
+    position: absolute;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 25px;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 10px 15px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.pool-message-image-preview-blur {
+    filter: blur(20px);
+}
+
 .pool-start-spacer {
     margin-top: 40px;
+}
+
+.pool-end-spacer {
+    margin-top: 20px;
 }
 
 
@@ -125,9 +186,10 @@ textarea {
     background-color: var(--dark-color);
     border-top: 2px solid var(--dark-color-secondary);
     margin: 0;
-    padding: 40px;
-    padding-top: 15px;
-    padding-bottom: 30px;
+    padding-left: 30px;
+    padding-top: 12px;
+    padding-bottom: 25px;
+    padding-right: 20px;
     -webkit-box-shadow: 0px 0px 10px 5px rgba(0,0,0,0.7); 
     box-shadow: 0px 0px 10px 5px rgba(0,0,0,0.7);
 }
@@ -137,7 +199,7 @@ textarea {
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
-    margin-bottom: 20px;
+    margin-bottom: 15px;
     gap: 4px 20px;
 }
 
@@ -161,18 +223,43 @@ textarea {
     font-size: 14px;
 }
 
+.display-message-input {
+    display: flex;
+    flex-direction: row;
+}
+
+.display-message-input-icons {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-left: 10px;
+}
+
+.display-message-input-icon {
+    width: 30px;
+    height: 30px;
+    object-fit: contain;
+    cursor: pointer;
+    border-radius: 5px;
+    padding: 5px;
+}
+
+.display-message-input-icon:hover {
+    background-color: rgba(255,255,255,0.1);
+}
+
 .display-text-input {
     display: flex;
     flex-direction: column;
     flex-grow: 1;
     background: var(--main-color-lightest);
-    padding: 12px;
+    padding: 10px;
     padding-left: 20px;
     border-radius: 5px;
     margin: 0px;
     border: none;
     outline: none;
-    font-size: 15px;
+    font-size: 14px;
     text-decoration: none;
     font-family: inherit;
     max-height: 154px;
@@ -188,7 +275,7 @@ textarea {
     flex-direction: row;
     flex-wrap: wrap;
     padding: 0px;
-    min-height: 44px;
+    min-height: 40px;
     max-height: 154px;
     overflow-y: scroll;
     overflow-x: hidden;
@@ -203,7 +290,7 @@ textarea {
     flex-direction: row;
     padding: 5px 10px;
     border-radius: 5px;
-    height: 30px;
+    height: 26px;
     border: 2px solid var(--dark-color-secondary);
     background-color: transparent;
     cursor: pointer;
@@ -225,12 +312,6 @@ textarea {
     white-space: nowrap;
     font-size: 14px;
     color: var(--light-color-secondary)
-}
-
-#display-file-input {
-    height: 0px;
-    width: 0px;
-    visibility: hidden;
 }
 
 [data-placeholder]:empty:before{
