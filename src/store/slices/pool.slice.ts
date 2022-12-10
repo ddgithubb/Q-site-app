@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE, DEFAULT_RECV_MESSAGES_CACHE } from "../../config/caching";
-import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser, PoolFileInfo, isMediaType, PoolFileProgress, PoolDownloadProgressStatus } from "../../pool/pool.model";
+import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser, PoolFileInfo, isMediaType, PoolFileProgress, PoolDownloadProgressStatus, PoolMessageView } from "../../pool/pool.model";
 
 export interface PoolsState {
     pools: Pool[];
@@ -19,7 +19,7 @@ export interface UpdateConnectionStateAction extends PoolAction {
 }
 
 export interface AddMessageAction extends PoolAction {
-    message: PoolMessage
+    message: PoolMessageView;
 }
 
 export interface AddFileOfferAction extends PoolAction {
@@ -107,90 +107,42 @@ const poolSlice = createSlice({
 
             if (action.payload.state != PoolConnectionState.CONNECTED) {
                 pool.activeNodes = [];
-                for (let i = 0; i < pool.Users.length; i++) {
-                    pool.Users[i].activeNodes = undefined;
-                }
+                // for (let i = 0; i < pool.Users.length; i++) {
+                //     pool.Users[i].activeNodes = undefined;
+                // }
             }
         },
         updateActiveNodes(state: PoolsState, action: PayloadAction<UpdateActiveNodesAction>) {
             let pool = getPool(state, action);
             pool.activeNodes = action.payload.activeNodes;
-            for (let i = pool.activeNodes.length - 1; i >= 0; i--) {
-                if (pool.activeNodes[i].nodeID == pool.myNode.nodeID) {
-                    pool.activeNodes.splice(i, 1);
+        },
+        addMessage(state: PoolsState, action: PayloadAction<AddMessageAction>) {
+            let pool = getPool(state, action);
+            let msg: PoolMessageView = action.payload.message;
+            //console.log("ADDING MESSAGE", msg, pool.messages[0]?.created)
+            if (pool.messages.length == 0) {
+                pool.messages.push(msg);
+                return;
+            }
+            for (let i = pool.messages.length; i >= 0; i--) {
+                if (i == 0 || msg.created >= pool.messages[i - 1].created) {
+                    pool.messages.splice(i + 1, 0, msg);
                     break;
                 }
             }
-        },
-        // updateLatest(state: PoolsState, action: PayloadAction<UpdateLatestAction>) {
-        //     let pool = getPool(state, action);
-        //     if (!action.payload.latest.messagesOnly) {
-        //         pool.activeNodes = action.payload.latest.activeNodes;
-        //         for (let i = pool.activeNodes.length - 1; i >= 0; i--) {
-        //             if (pool.activeNodes[i].nodeID == pool.myNode.nodeID) {
-        //                 pool.activeNodes.splice(i, 1);
-        //                 break;
-        //             }
-        //         }
-        //     }
-        //     if (action.payload.latest.lastMessageID == "") {
-        //         pool.messages = action.payload.latest.messages;
-        //     }
-        //     // else if (action.payload.latest.messages.length > 0) {
-        //     //     let i = pool.messages.length - 1;
-        //     //     for (; i >= 0; i--) {
-        //     //         if (pool.messages[i].msgID == action.payload.latest.lastMessageID) {
-        //     //             break;
-        //     //         }
-        //     //     }
-        //     //     if (i == -1) {
-        //     //         pool.messages = action.payload.latest.messages;
-        //     //     } else if ((pool.messages.length - 1 - i) < action.payload.latest.messages.length) {
-        //     //         pool.messages.splice(i + 1);
-        //     //         pool.messages.push(...action.payload.latest.messages);
-        //     //     }
-        //     // }
-        // },
-        addMessage(state: PoolsState, action: PayloadAction<AddMessageAction>) {
-            let pool = getPool(state, action);
-            let msg: PoolMessage = action.payload.message;
-            msg.received = Date.now();
-            pool.messages.push(msg);
-            if (pool.messages.length > DEFAULT_MESSAGES_CACHE) {
-                pool.messages.shift();
-            }
-            
-            // let fileOffer: PoolFileInfo | undefined;
-            
-            // if (action.payload.message.type == PoolMessageType.FILE) {
-            //     fileOffer = action.payload.message.data
-            // } else if (isMediaType(action.payload.message.type)) {
-            //     fileOffer = action.payload.message.data.fileInfo;
-            // }
-
-            // if (fileOffer != undefined) {
-            //     if (action.payload.message.src.nodeID == pool.myNode.nodeID) {
-            //         pool.myNode.fileOffers.unshift(fileOffer);
-            //     } else {
-            //         for (const node of pool.activeNodes) {
-            //             if (node.nodeID == action.payload.message.src.nodeID) {
-            //                 node.fileOffers.unshift(fileOffer);
-            //                 break;
-            //             }
-            //         }
-            //     }
+            // if (pool.messages.length > DEFAULT_MESSAGES_CACHE) {
+            //     pool.messages.shift();
             // }
         },
         addFileOffer(state: PoolsState, action: PayloadAction<AddFileOfferAction>) {
             let pool = getPool(state, action);
             if (action.payload.fileOffer.nodeID == pool.myNode.nodeID) {
                 pool.myNode.fileOffers.unshift(action.payload.fileOffer);
-            } else {
-                for (const node of pool.activeNodes) {
-                    if (node.nodeID == action.payload.fileOffer.nodeID) {
-                        node.fileOffers.unshift(action.payload.fileOffer);
-                        break;
-                    }
+            }
+            for (const node of pool.activeNodes) {
+                if (node.nodeID == action.payload.fileOffer.nodeID) {
+                    node.fileOffers.unshift(action.payload.fileOffer);
+                    break;
                 }
             }
         },
@@ -202,30 +154,34 @@ const poolSlice = createSlice({
                         pool.myNode.fileOffers.splice(i, 1);
                     }
                 }
-            } else {
-                for (const node of pool.activeNodes) {
-                    if (node.nodeID == action.payload.nodeID) {
-                        for (let i = 0; i < node.fileOffers.length; i++) {
-                            if (node.fileOffers[i].fileID == action.payload.fileID) {
-                                node.fileOffers.splice(i, 1);
-                            }
+            }
+            for (const node of pool.activeNodes) {
+                if (node.nodeID == action.payload.nodeID) {
+                    for (let i = 0; i < node.fileOffers.length; i++) {
+                        if (node.fileOffers[i].fileID == action.payload.fileID) {
+                            node.fileOffers.splice(i, 1);
                         }
-                        break;
                     }
+                    break;
                 }
             }
         },
         addActiveNode(state: PoolsState, action: PayloadAction<AddActiveNodeAction>) {
             let pool = getPool(state, action);
             pool.activeNodes.push(action.payload.node);
-
-            for (let i = 0; i < pool.Users.length; i++) {
-                if (pool.Users[i].UserID == action.payload.node.userID) {
-                    if (!pool.Users[i].activeNodes) pool.Users[i].activeNodes = [];
-                    pool.Users[i].activeNodes?.push(action.payload.node);
-                    break;
-                }
-            }
+            // for (let i = 0; i < pool.Users.length; i++) {
+            //     if (pool.Users[i].UserID == action.payload.node.userID) {
+            //         if (pool.Users[i].activeNodes == undefined) {
+            //             pool.Users[i].activeNodes = [action.payload.node];
+            //             let tempUser = pool.Users[i];
+            //             pool.Users.splice(i, 1);
+            //             pool.Users.unshift(tempUser);
+            //         } else {
+            //             pool.Users[i].activeNodes?.push(action.payload.node);
+            //         }
+            //         break;
+            //     }
+            //}
         },
         removeActiveNode(state: PoolsState, action: PayloadAction<RemoveActiveNodeAction>) {
             let pool = getPool(state, action);
@@ -237,19 +193,34 @@ const poolSlice = createSlice({
                 }
             }
 
-            if (userID != "") {
-                for (let i = 0; i < pool.Users.length; i++) {
-                    if (pool.Users[i].UserID == userID) {
-                        if (!pool.Users[i].activeNodes) break;
-                        for (let j = 0; j < pool.Users[i].activeNodes!.length; j++) {
-                            if (pool.Users[i].activeNodes![j].nodeID == action.payload.nodeID) {
-                                pool.Users[i].activeNodes!.splice(j, 1);
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
+            // if (userID != "") {
+            //     for (let i = 0; i < pool.Users.length; i++) {
+            //         if (pool.Users[i].UserID == userID) {
+            //             if (!pool.Users[i].activeNodes) break;
+            //             for (let j = 0; j < pool.Users[i].activeNodes!.length; j++) {
+            //                 if (pool.Users[i].activeNodes![j].nodeID == action.payload.nodeID) {
+            //                     pool.Users[i].activeNodes!.splice(j, 1);
+            //                     if (pool.Users[i].activeNodes?.length == 0) {
+            //                         pool.Users[i].activeNodes = undefined;
+            //                         let tempUser = pool.Users[i];
+            //                         pool.Users.splice(i, 1);
+            //                         let found = false;
+            //                         for (let i = pool.Users.length - 1; i >= 0; i--) {
+            //                             if (pool.Users[i].activeNodes || tempUser.DisplayName >= pool.Users[i].DisplayName) {
+            //                                 pool.Users.splice(i + 1, 0, tempUser);
+            //                                 found = true;
+            //                                 break;
+            //                             }
+            //                         }
+            //                         if (!found) pool.Users.unshift(tempUser);
+            //                         break;
+            //                     }
+            //                 }
+            //             }
+            //             break;
+            //         }
+            //     }
+            // }
         },
         addDownload(state: PoolsState, action: PayloadAction<AddDownloadAction>) {
             let pool = getPool(state, action);
@@ -287,10 +258,8 @@ const poolSlice = createSlice({
         },
         removeDownload(state: PoolsState, action: PayloadAction<RemoveDownloadAction>) {
             let pool = getPool(state, action);
-            console.log("REMOVING DOWNLOAD", action.payload.fileID);
             for (let i = 0; i < pool.downloadQueue.length; i++) {
                 if (pool.downloadQueue[i].fileID == action.payload.fileID) {
-                    console.log("RMEOVING DOWNLOADINGqrefd")
                     pool.downloadQueue.splice(i, 1);
                     return;
                 }

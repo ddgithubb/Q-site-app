@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import './App.css'
-import { PoolInfo, PoolUser } from './pool/pool.model'
+import { DeviceType, PoolInfo, PoolUser } from './pool/pool.model'
 import { poolAction } from './store/slices/pool.slice'
 import { getStoreState, store } from './store/store'
 import { BrowserRouter, Route, Routes } from "react-router-dom"
@@ -10,6 +10,7 @@ import { mebibytesToBytes } from './helpers/file-size'
 import { FileManager } from './pool/global'
 
 const dispatch = store.dispatch
+// USERS SHOULD BE SORTED FROM SERVER
 dispatch(poolAction.initPools([
   {
     PoolID: "main",
@@ -17,6 +18,11 @@ dispatch(poolAction.initPools([
     Users: [ {
       UserID: "TEST_USER_ID",
       DisplayName: "TEST_USER",
+      Devices: [getStoreState().profile.device, {
+        deviceID: "OTHER_DEVICE_ID",
+        deviceType: DeviceType.DESKTOP,
+        deviceName: "OTHER_DEVICE_NAME",
+      }],
     } ],
     Settings: {
       maxTextLength: 5000,

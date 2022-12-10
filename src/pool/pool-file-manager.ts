@@ -2,7 +2,7 @@ import { nanoid } from "nanoid";
 import { fileSizeToString, kibibytesToBytes, mebibytesToBytes } from "../helpers/file-size";
 import { poolAction, RemoveDownloadAction, SetMediaURLAction, UpdateDownloadProgressAction } from "../store/slices/pool.slice";
 import { getStoreState, store } from "../store/store";
-import { PoolManager } from "./global";
+import { FileManager, PoolManager } from "./global";
 import { getCacheChunkNumberFromChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
 import { PoolChunkRange, PoolFileInfo, PoolFileRequest, PoolNode } from "./pool.model";
 // @ts-expect-error
@@ -54,21 +54,21 @@ export interface CacheChunkData {
 }
 
 export class FileManagerClass {
-    fileSystemAccess: boolean;
-    downloadLink?: HTMLAnchorElement;
-    currentFileDownloadSize: number; // size of fileDownloads and fileStore
+    private fileSystemAccess: boolean;
+    private downloadLink?: HTMLAnchorElement;
+    private currentFileDownloadSize: number; // size of fileDownloads and fileStore
     private fileOffers: Map<string, Map<string, FileOffer>>; // key: PoolID, key: fileID
-    fileDownloads: Map<string, FileDownload>; // key: fileID
-    fileDownloadTimer: NodeJS.Timer | undefined;
-    fileCacheChunks: Map<string, CacheChunk>; // key: fileID
-    cacheChunkMapDataFlushTimer: NodeJS.Timer | undefined;
-    cacheChunkQueue: string[]; // value: cache key
-    cacheChunkMap: Map<string, CacheChunkMapData>; // key: fileID
-    maxCacheChunkCount: number;
-    mediaCacheObjectURL: Map<string, string>; // key: fileID
-    mediaCacheQueue: MediaCacheInfo[];
-    curMediaCacheSize: number;
-    maxMediaCacheSize: number;
+    private fileDownloads: Map<string, FileDownload>; // key: fileID
+    private fileDownloadTimer: NodeJS.Timer | undefined;
+    private fileCacheChunks: Map<string, CacheChunk>; // key: fileID
+    private cacheChunkMapDataFlushTimer: NodeJS.Timer | undefined;
+    private cacheChunkQueue: string[]; // value: cache key
+    private cacheChunkMap: Map<string, CacheChunkMapData>; // key: fileID
+    private maxCacheChunkCount: number;
+    private mediaCacheObjectURL: Map<string, string>; // key: fileID
+    private mediaCacheQueue: MediaCacheInfo[];
+    private curMediaCacheSize: number;
+    private maxMediaCacheSize: number;
     private webworker: any;
 
     constructor() {
@@ -98,6 +98,12 @@ export class FileManagerClass {
     init(): Promise<boolean> {
         return this.webworker.exec('initDB');
     } 
+
+    cleanUp() {
+        this.fileDownloads.forEach((fileDownload, fileID) => {
+            this.completeFileDownload(fileID);
+        });
+    }
 
     private startCacheChunksFlushTimer() {
         if (this.cacheChunkMapDataFlushTimer) return;
@@ -331,7 +337,6 @@ export class FileManagerClass {
         let offset = chunkNumber * CHUNK_SIZE
         if (!fileDownload.isMedia && this.fileSystemAccess) {
             fileDownload.fileStream?.write({ type: "write", position: offset, data: binaryData }).catch((e) => {
-                console.log(e);
                 this.completeFileDownload(fileID)
             });
         } else {
@@ -358,7 +363,6 @@ export class FileManagerClass {
     }
     
     completeFileDownload(fileID: string) {
-        // client activated OR we see disconnected node
         let fileDownload = this.fileDownloads.get(fileID);
         if (!fileDownload) return;
         console.log(fileDownload, Date.now())
@@ -388,10 +392,6 @@ export class FileManagerClass {
                 }
             }
             fileDownload.memoryChunks = undefined;
-        }
-
-        if (fileDownload.chunksDownloaded != fileDownload.totalChunks) {
-            alert("Error downloading " + fileDownload.poolFileInfo.fileName);
         }
 
         store.dispatch(poolAction.removeDownload({
@@ -530,5 +530,9 @@ export class FileManagerClass {
 
     hasMediaCache(fileID: string): boolean {
         return this.mediaCacheObjectURL.has(fileID);
+    }
+
+    getCacheChunkMapData(fileID: string): CacheChunkMapData | undefined {
+        return this.cacheChunkMap.get(fileID);
     }
 }

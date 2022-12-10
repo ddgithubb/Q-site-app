@@ -1,7 +1,7 @@
 import { HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TIMEOUT_SECONDS, WSHOST } from "../config/http";
 import { SSLwtMessage, SSMessage } from "./sync-server.model";
 import { PoolClient } from "./pool-client";
-import { FILE_ID_LENGTH, Pool, PoolConnectionState, PoolFileInfo, PoolImageInfo, PoolMessageDestinationInfo } from "./pool.model";
+import { FILE_ID_LENGTH, Pool, PoolChunkRange, PoolConnectionState, PoolFileInfo, PoolImageInfo, PoolMessageDestinationInfo } from "./pool.model";
 import { store } from "../store/store";
 import { poolAction, UpdateConnectionStateAction } from "../store/slices/pool.slice";
 import { initializePool } from "./sync-server-client";
@@ -12,7 +12,7 @@ declare global {
 }
 
 export class PoolManagerClass {
-    connectedPools: Map<string, PoolClient>;
+    private connectedPools: Map<string, PoolClient>;
 
     constructor() {
         this.connectedPools = new Map<string, PoolClient>();
@@ -69,7 +69,7 @@ export class PoolManagerClass {
         return true;
     }
 
-    sendRequestFileToPool(poolID: string, poolFileInfo: PoolFileInfo, isMedia: boolean = false, chunksMissing: number[][] = []): boolean {
+    sendRequestFileToPool(poolID: string, poolFileInfo: PoolFileInfo, isMedia: boolean = false, chunksMissing?: PoolChunkRange[]): boolean {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
         poolClient.sendRequestFile(poolFileInfo, isMedia, chunksMissing);
@@ -83,10 +83,24 @@ export class PoolManagerClass {
         return true;
     }
 
+    sendRemoveFileRequest(poolID: string, fileInfo: PoolFileInfo): boolean {
+        let poolClient = this.connectedPools.get(poolID);
+        if (!poolClient) return false;
+        poolClient.sendRemoveFileRequest(fileInfo);
+        return true;
+    }
+
     completeFileDownload(poolID: string, fileID: string): boolean {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
         poolClient.completeFileDownload(fileID);
+        return true;
+    }
+
+    sendRetractFileOffer(poolID: string, fileID: string): boolean {
+        let poolClient = this.connectedPools.get(poolID);
+        if (!poolClient) return false;
+        poolClient.sendRetractFileOffer(fileID);
         return true;
     }
 }

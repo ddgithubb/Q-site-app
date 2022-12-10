@@ -1,22 +1,19 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE } from "../../config/caching";
-import { Pool, PoolInfo, PoolMessage } from "../../pool/pool.model";
-
-export enum DeviceType {
-    COMPUTER,
-    MOBILE,
-}
+import { DeviceType, Pool, PoolDevice, PoolInfo, PoolMessage } from "../../pool/pool.model";
 
 export interface ProfileState {
     userID: string;
-    deviceType: DeviceType;
-    deviceName: string;
+    device: PoolDevice;
 }
 
 const initialState: ProfileState = {
     userID: "TEST_USER_ID",
-    deviceType: DeviceType.COMPUTER,
-    deviceName: "Main device",
+    device: {
+        deviceID: "DEVICE_ID",
+        deviceType: DeviceType.BROWSER,
+        deviceName: "Main device",
+    }
 }
 
 const profileSlice = createSlice({
@@ -25,8 +22,7 @@ const profileSlice = createSlice({
     reducers: {
         initProfile(state: ProfileState, action: PayloadAction<ProfileState>) {
             state.userID = action.payload.userID;
-            state.deviceType = action.payload.deviceType;
-            state.deviceName = action.payload.deviceName;
+            state.device = action.payload.device;
         }
     }
 });

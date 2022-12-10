@@ -27,6 +27,7 @@ var initDB = () => {
         objectStoreDB = req.result;
         req.result.createObjectStore('pool-chunks-cache');
         req.result.createObjectStore('pool-file-offers');
+        req.result.createObjectStore('pool-messages');
         resolve(true);
     }
 

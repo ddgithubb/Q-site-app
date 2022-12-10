@@ -1,0 +1,183 @@
+.pool-messages-container {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    word-wrap: break-word;
+    overflow-x: hidden;
+    overflow-y: scroll;
+}
+
+.pool-message-container {
+    display: flex;
+    position: relative;
+    flex-direction: column;
+    padding: 4px 40px;
+}
+
+.pool-message-container:hover {
+    background-color: var(--dark-color-tertiary);
+}
+
+.pool-message-data-container {
+    display: flex;
+    flex-direction: row;
+}
+
+.pool-message-info-bar {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    height: 20px;
+    margin-bottom: 5px;
+}
+
+.pool-message-name {
+    font-weight: bold;
+    font-size: 15px;
+}
+
+.pool-message-date {
+    margin-left: 20px;
+    font-size: 12px;
+    color: var(--light-color-secondary);
+}
+
+.pool-message-portable-date {
+    position: absolute;
+    right: 15px;
+    display: none;
+}
+
+.pool-message-container:hover .pool-message-portable-date {
+    background-color: var(--dark-color-tertiary);
+    display: block;
+}
+
+.pool-message-text {
+    font-size: 15px;
+}
+
+.pool-message-file-data-container {
+    display: flex;
+    flex-direction: row;
+}
+
+.pool-message-file-container {
+    display: flex;
+    position: relative;
+    flex-direction: row;
+    align-items: center;
+    background-color: var(--dark-color-secondary);
+    gap: 20px;
+    padding: 15px 20px;
+    border-radius: 5px;
+    min-width: 0px;
+}
+
+.pool-message-file-name {
+    flex: 1;
+    font-size: 15px;
+    min-width: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+
+.pool-message-file-name:hover {
+    text-decoration: underline;
+}
+
+.pool-message-file-size {
+    font-size: 14px;
+    white-space: nowrap;
+    color: var(--light-color-secondary);
+}
+
+.pool-message-status {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 12px;
+    margin-bottom: 5px;
+    color: var(--text-color-greyed);
+}
+
+.pool-message-node-status {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 12px;
+    border-radius: 5px;
+    margin: 2px 0px;
+    color: var(--text-color-greyed);
+}
+
+.pool-message-image-container {
+    display: flex;
+    flex-direction: row;
+    margin-top: 10px;
+}
+
+.pool-message-image-download-container {
+    display: flex;
+    align-items: center;
+    margin-top: 5px;
+    cursor: pointer;
+}
+
+.pool-message-image-download-icon {
+    width: 22px;
+    height: 22px;
+    object-fit: contain;
+    margin-right: 10px;
+}
+
+.pool-message-image-download-filename {
+    font-size: 14px;
+}
+
+.pool-message-image-download-filename:hover {
+    text-decoration: underline;
+}
+
+.pool-message-image-sub-container {
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.pool-message-image {
+    max-width: 400px;
+    max-height: 400px;
+}
+
+.pool-message-image-missing-container {
+    position: absolute;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border-radius: 25px;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 10px 15px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.pool-message-image-missing-container:hover {
+    background-color: rgba(0, 0, 0, 0.7);
+}
+
+.pool-message-image-preview-blur {
+    filter: blur(20px);
+}
+
+.pool-start-spacer {
+    margin-top: 40px;
+}
+
+.pool-end-spacer {
+    margin-top: 20px;
+}

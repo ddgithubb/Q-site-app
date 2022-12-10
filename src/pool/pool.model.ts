@@ -1,5 +1,4 @@
 import { nanoid } from "nanoid";
-import { DeviceType } from "../store/slices/profile.slice";
 
 export const NODE_ID_LENGTH = 10;
 export const MESSAGE_ID_LENGTH = 21;
@@ -8,10 +7,11 @@ export const FILE_ID_LENGTH = 21;
 export enum PoolMessageType {
     SIGNAL_STATUS,
     GET_LATEST,
-    RETRACT_MESSAGE,
     TEXT,
     FILE,
     IMAGE,
+    RETRACT_FILE_OFFER,
+    REMOVE_FILE_REQUEST,
     REQUEST_MEDIA_HINT,
 }
 
@@ -39,17 +39,26 @@ export enum PoolDownloadProgressStatus {
     UNAVAILABLE,
 }
 
-export interface PoolMessage {
-    src: PoolMessageSourceInfo;
-    dests?: PoolMessageDestinationInfo[];
-    type: PoolMessageType;
-    action: PoolMessageAction;
+export enum DeviceType {
+    BROWSER,
+    DESKTOP,
+    MOBILE,
+}
+
+export interface PoolMessageView {
     msgID: string;
-    userID: string
+    type: PoolMessageType;
+    userID: string;
     created: number;
     data: any;
-    partnerIntPath: number | null;
     received?: number;
+}
+
+export interface PoolMessage extends PoolMessageView {
+    src: PoolMessageSourceInfo;
+    dests?: PoolMessageDestinationInfo[];
+    action: PoolMessageAction;
+    partnerIntPath: number | null;
 }
 
 export interface PoolMessageSourceInfo {
@@ -86,7 +95,7 @@ export interface Pool {
     myNode: PoolNode;
     activeNodes: PoolNode[];
     downloadQueue: PoolFileProgress[];
-    messages: PoolMessage[];
+    messages: PoolMessageView[];
 }
 
 export interface PoolSettings {
@@ -98,21 +107,26 @@ export interface PoolUpdateLatestInfo {
     messagesOnly: boolean;
     lastMessageID: string;
     activeNodes: PoolNode[];
-    messages: PoolMessage[];
+    messages: PoolMessageView[];
 }
 
 export interface PoolUser {
     UserID: string;
     DisplayName: string;
-    activeNodes?: PoolNode[];
+    Devices: PoolDevice[];
+}
+
+export interface PoolDevice {
+    deviceID: string;    
+    deviceType: DeviceType;
+    deviceName: string;
 }
 
 export interface PoolNode {
     nodeID: string;
     userID: string;
+    deviceID: string;
     state: PoolNodeState;
-    deviceType: DeviceType;
-    deviceName: string;
     fileOffers: PoolFileInfo[];
     lastSeenPath: number[];
 }
@@ -156,13 +170,18 @@ export interface PoolImageInfo extends PoolMediaInfo {
     previewImage: string;
 }
 
+export interface PoolRemoveFileRequest {
+    requestingNodeID: string;
+    fileID: string;
+}
+
 export interface PoolRequestMediaHint {
     fileInfo: PoolFileInfo;
 }
 
-export interface PoolRetractMessage {
-    type: PoolMessageType;
-    id: string; // msgID or fileID
+export interface PoolRetractFileOffer {
+    fileID: string;
+    nodeID: string;
 }
 
 export function isMediaType(type: PoolMessageType): boolean {

@@ -1,0 +1,30 @@
+.dot {
+    border-radius: 50%;
+}
+
+.small-dot {
+    height: 8px;
+    width: 8px;
+}
+
+.medium-dot {
+    height: 10px;
+    width: 10px;
+}
+
+.large-dot {
+    height: 12px;
+    width: 12px;
+}
+
+.online-dot {
+    background-color: var(--success-color);
+}
+
+.danger-dot {
+    background-color: var(--danger-color);
+}
+
+.offline-dot {
+    background-color: var(--grey-color);
+}

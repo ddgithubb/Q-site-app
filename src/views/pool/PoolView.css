@@ -12,370 +12,6 @@ textarea {
     overflow: hidden;
 }
 
-.pool-messages-container {
-    display: flex;
-    flex-direction: column;
-    flex-grow: 1;
-    word-wrap: break-word;
-    overflow-x: hidden;
-    overflow-y: scroll;
-    gap: 20px;
-    padding: 0px 40px;
-}
-
-.pool-message-container {
-    display: flex;
-    flex-direction: column;
-}
-
-.pool-message-data-container {
-    display: flex;
-    flex-direction: row;
-}
-
-.pool-message-info-bar {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    height: 20px;
-    margin-top: 5px;
-    margin-bottom: 5px;
-}
-
-.pool-message-name {
-    font-weight: bold;
-    font-size: 15px;
-}
-
-.pool-message-date {
-    margin-left: 20px;
-    font-size: 12px;
-    color: var(--light-color-secondary)
-}
-
-.pool-message-text {
-    font-size: 15px;
-}
-
-.pool-message-file-data-container {
-    display: flex;
-    flex-direction: row;
-    padding-top: 10px;
-}
-
-.pool-message-file-container {
-    display: flex;
-    position: relative;
-    flex-direction: row;
-    align-items: center;
-    background-color: var(--dark-color-secondary);
-    gap: 20px;
-    padding: 15px 20px;
-    border-radius: 5px;
-    min-width: 0px;
-}
-
-.pool-message-file-name {
-    flex: 1;
-    font-size: 15px;
-    min-width: 10px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    cursor: pointer;
-}
-
-.pool-message-file-name:hover {
-    text-decoration: underline;
-}
-
-.pool-message-file-size {
-    font-size: 14px;
-    white-space: nowrap;
-    color: var(--light-color-secondary);
-}
-
-.pool-message-status {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-size: 12px;
-    color: var(--text-color-greyed);
-}
-
-.pool-message-node-status {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    font-size: 12px;
-    border-radius: 5px;
-    color: var(--text-color-greyed);
-}
-
-.pool-message-image-container {
-    display: flex;
-    flex-direction: row;
-    margin-top: 10px;
-}
-
-.pool-message-image-download-container {
-    display: flex;
-    align-items: center;
-    margin-top: 5px;
-    cursor: pointer;
-}
-
-.pool-message-image-download-icon {
-    width: 22px;
-    height: 22px;
-    object-fit: contain;
-    margin-right: 10px;
-}
-
-.pool-message-image-download-filename {
-    font-size: 14px;
-}
-
-.pool-message-image-download-filename:hover {
-    text-decoration: underline;
-}
-
-.pool-message-image-sub-container {
-    overflow: hidden;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.pool-message-image {
-    max-width: 400px;
-    max-height: 400px;
-}
-
-.pool-message-image-missing-container {
-    position: absolute;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    border-radius: 25px;
-    background-color: rgba(0, 0, 0, 0.5);
-    padding: 10px 15px;
-    font-size: 14px;
-    cursor: pointer;
-}
-
-.pool-message-image-preview-blur {
-    filter: blur(20px);
-}
-
-.pool-start-spacer {
-    margin-top: 40px;
-}
-
-.pool-end-spacer {
-    margin-top: 20px;
-}
-
-
-/* Display Containers */
-.display-container {
-    display: flex;
-    position: relative;
-    flex-direction: column;
-    background-color: var(--dark-color);
-    border-top: 2px solid var(--dark-color-secondary);
-    margin: 0;
-    padding-left: 30px;
-    padding-top: 12px;
-    padding-bottom: 25px;
-    padding-right: 20px;
-    -webkit-box-shadow: 0px 0px 10px 5px rgba(0,0,0,0.7); 
-    box-shadow: 0px 0px 10px 5px rgba(0,0,0,0.7);
-}
-
-.display-info-bar {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    margin-bottom: 15px;
-    gap: 4px 20px;
-}
-
-.display-info-bar-pool-name {
-    color: var(--light-color);
-    font-size: 16px;
-    margin-top: 5px;
-    margin-bottom: 5px;
-    margin-right: 10px;
-}
-
-.display-info-bar-status {
-    display: flex;
-    align-items: center;
-    flex-direction: row;
-    gap: 10px;
-}
-
-.display-info-bar-subtitle {
-    color: var(--light-color);
-    font-size: 14px;
-}
-
-.display-message-input {
-    display: flex;
-    flex-direction: row;
-}
-
-.display-message-input-icons {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    margin-left: 10px;
-}
-
-.display-message-input-icon {
-    width: 30px;
-    height: 30px;
-    object-fit: contain;
-    cursor: pointer;
-    border-radius: 5px;
-    padding: 5px;
-}
-
-.display-message-input-icon:hover {
-    background-color: rgba(255,255,255,0.1);
-}
-
-.display-text-input {
-    display: flex;
-    flex-direction: column;
-    flex-grow: 1;
-    background: var(--main-color-lightest);
-    padding: 10px;
-    padding-left: 20px;
-    border-radius: 5px;
-    margin: 0px;
-    border: none;
-    outline: none;
-    font-size: 14px;
-    text-decoration: none;
-    font-family: inherit;
-    max-height: 154px;
-    word-wrap: break-word;
-    overflow-x: hidden;
-    overflow-y: scroll;
-    color: var(--dark-color);
-}
-
-.display-files-container {
-    display: flex;
-    align-items: center;
-    flex-direction: row;
-    flex-wrap: wrap;
-    padding: 0px;
-    min-height: 40px;
-    max-height: 154px;
-    overflow-y: scroll;
-    overflow-x: hidden;
-    background-color: transparent;
-    gap: 10px 20px;
-    font-size: 15px;
-}
-
-.display-file-container {
-    display: flex;
-    align-items: center;
-    flex-direction: row;
-    padding: 5px 10px;
-    border-radius: 5px;
-    height: 26px;
-    border: 2px solid var(--dark-color-secondary);
-    background-color: transparent;
-    cursor: pointer;
-    gap: 10px;
-    max-width: 300px;
-    min-width: 0px;
-    white-space: nowrap;
-}
-
-.display-file-name {
-    flex: 1;
-    font-size: 15px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.display-file-size {
-    white-space: nowrap;
-    font-size: 14px;
-    color: var(--light-color-secondary)
-}
-
-[data-placeholder]:empty:before{
-    content: attr(data-placeholder);
-    color: #888;
-    cursor:text;
-}
-
-.display-overlay-container {
-    display: flex;
-    flex-direction: column;
-    position: absolute;
-    width: 100vw;
-    top: -50px;
-    left: 0px;
-    overflow-x: scroll;
-}
-
-.display-downloading-files-container {
-    display: flex;
-    flex-direction: row-reverse;
-    flex-grow: 1;
-    padding: 0px 15px;
-    padding-bottom: 5px;
-    gap: 10px;
-    min-width: min-content;
-}
-
-.display-downloading-file {
-    display: flex;
-    align-items: center;
-    height: 35px;
-    background-color: var(--dark-color-secondary);
-    border-radius: 5px;
-    padding: 0px 15px;
-    gap: 10px;
-    max-width: 150px;
-    white-space: nowrap;
-    overflow: hidden;
-    cursor: pointer;
-}
-
-.display-downloading-file-name {
-    flex: 1;
-    font-size: 14px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.display-downloading-file-progress {
-    width: 20px;
-    height: 20px;
-}
-
-.CircularProgressbar-path {
-    stroke: var(--main-color-light);
-}
-
-.CircularProgressbar-trail {
-    stroke: var(--main-color-lightest);
-    opacity: 0.1;
-}
-
 /* Action Bar */
 .action-bar {
     display: flex;
@@ -384,20 +20,30 @@ textarea {
     position: fixed;
     bottom: 230px;
     right: 0px;
-    padding-right: 30px;
+    padding-right: 25px;
 }
 
 .action-bar-button {
     display: flex;
     justify-content: center;
     align-items: center;
-    margin: 8px;
+    margin: 5px;
     height: 50px;
     width: 50px;
     border-radius: 50%;
     -webkit-box-shadow: 5px 5px 15px 5px rgba(0,0,0,0.7); 
     box-shadow: 5px 5px 15px 5px rgba(0,0,0,0.7);
     cursor: pointer;
+    opacity: 0.4;
+    transition: opacity 0.1s;
+}
+
+.action-bar-button:hover {
+    opacity: 0.90;
+}
+
+.action-bar-button-selected {
+    opacity: 1;
 }
 
 .action-bar-button-spacer {
@@ -427,10 +73,6 @@ textarea {
 
 .action-bar-button-danger {
     background-color: var(--danger-color)
-}
-
-.action-bar-button-selected {
-    transform: scale(1.2) !important;
 }
 
 

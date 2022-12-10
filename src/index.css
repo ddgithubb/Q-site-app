@@ -12,6 +12,7 @@
 
   --dark-color: #202124;
   --dark-color-secondary: #19191b;
+  --dark-color-tertiary: #1d1d20;
 
   --grey-color: #4f5157;
 
@@ -34,6 +35,11 @@ body {
 
 img {
   -webkit-user-drag: none;
+  -moz-user-select: -moz-none;
+  -khtml-user-select: none;
+  -webkit-user-select: none;
+  -o-user-select: none;
+  user-select: none;
 }
 
 .hideInput {
