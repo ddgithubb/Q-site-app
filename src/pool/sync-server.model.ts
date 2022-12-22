@@ -1,3 +1,4 @@
+import { PoolBasicNode, PoolNodeInfo } from "./pool.model";
 
 export enum SSStatus {
     UNSUCCESSFUL = 0,
@@ -26,14 +27,25 @@ export interface SSSDPData {
     Status: number;
 }
 
-export interface SSDisconnectData {
-    RemoveFromPool: boolean;
-}
-
 export interface SSNodeStatusData {
     Status: number;
 }
 
 export interface SSReportNodeData {
     ReportCode: number;
+}
+
+export type SSAddNodesData = SSAddNodeData[];
+
+export interface SSAddNodeData {
+    NodeID: string;
+    Path: number[];
+    Timestamp: number;
+    NodeInfo: PoolNodeInfo; 
+}
+
+export interface SSRemoveNodeData {
+    NodeID: string;
+    Timestamp: number;
+    PromotedNodes: PoolBasicNode[]
 }

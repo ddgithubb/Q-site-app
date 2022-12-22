@@ -56,19 +56,19 @@ function PoolDisplayUsersViewComponent({ poolID, users, userMap, hidden }: PoolD
                                     <motion.div initial={{ maxHeight: 0 }} animate={{ maxHeight: 400 }} exit={{ maxHeight: 0 }}>
                                         <div className="display-user-devices-container">
                                             {
-                                                user.Devices.slice().sort((a, b) => (userActiveDevices!.activeDevices!.has(a.deviceID) ? 0 : 1) - (userActiveDevices!.activeDevices!.has(b.deviceID) ? 0 : 1)).map((node) => (
-                                                    <div className={"display-user-device-container " + "display-user-device-container" + (userActiveDevices?.activeDevices?.has(node.deviceID) ? "-online" : "-offline")} key={node.deviceID}>
+                                                user.Devices.slice().sort((a, b) => (userActiveDevices!.activeDevices!.has(a.DeviceID) ? 0 : 1) - (userActiveDevices!.activeDevices!.has(b.DeviceID) ? 0 : 1)).map((node) => (
+                                                    <div className={"display-user-device-container " + "display-user-device-container" + (userActiveDevices?.activeDevices?.has(node.DeviceID) ? "-online" : "-offline")} key={node.DeviceID}>
                                                         {/* TODO: device type icon */}
                                                         <div className="display-user-device-header">
                                                             <img src={
-                                                                node.deviceType == DeviceType.BROWSER ? BrowserIcon :
-                                                                node.deviceType == DeviceType.DESKTOP ? DesktopIcon :
-                                                                node.deviceType == DeviceType.MOBILE ? MobilePhoneIcon : BrowserIcon
+                                                                node.DeviceType == DeviceType.BROWSER ? BrowserIcon :
+                                                                node.DeviceType == DeviceType.DESKTOP ? DesktopIcon :
+                                                                node.DeviceType == DeviceType.MOBILE ? MobilePhoneIcon : BrowserIcon
                                                             } height="20" width="20" />
-                                                            <span>{node.deviceName}</span>
+                                                            <span>{node.DeviceName}</span>
                                                         </div>
                                                         {
-                                                            userActiveDevices?.activeDevices?.get(node.deviceID)?.fileOffers.map((fileOffer) => (
+                                                            userActiveDevices?.activeDevices?.get(node.DeviceID)?.fileOffers.map((fileOffer) => (
                                                                 // PoolFileInfo type (change in model)
                                                                 <div className="display-user-device-file-offer" key={fileOffer.fileID}>
                                                                     <span className="display-user-device-file-name" onClick={() => PoolManager.sendRequestFileToPool(poolID, fileOffer)}>{fileOffer.fileName}</span> 

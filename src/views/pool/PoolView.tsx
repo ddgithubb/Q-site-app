@@ -2,7 +2,7 @@ import React, { createRef, LegacyRef, memo, useEffect, useMemo, useRef, useState
 import { useSelector } from 'react-redux';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { PoolClient } from '../../pool/pool-client';
-import { PoolConnectionState, PoolDevice, PoolFileInfo, PoolMessage, PoolMessageType, PoolNode, PoolNodeState, PoolUser } from '../../pool/pool.model';
+import { PoolConnectionState, PoolDevice, PoolFileInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolNodeState, PoolUser } from '../../pool/pool.model';
 import { getStoreState, GlobalState } from '../../store/store';
 import sanitizeHtml from 'sanitize-html';
 import { HTMLMotionProps, motion, MotionProps } from 'framer-motion';
@@ -101,12 +101,6 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
 
     return (
         <div className="pool-view">
-            <motion.div className="pool-status-container" initial={{ y: -100 }} animate={{ y: (pool?.connectionState == PoolConnectionState.RECONNECTING ? 20 : -100) }}> 
-                <div className="pool-status pool-status-disconnected">
-                    <img className="pool-status-img" src={DisconnectedIcon} />
-                    Lost Connection. Reconnecting...
-                </div>
-            </motion.div>
             {/* TODO: add fixed siaply of pool name along with # of active devices, # of active users, and # of users in general */}
             <PoolMessagesView poolID={poolID} messages={pool?.messages || []} userMap={userMap} />
             {
@@ -126,6 +120,12 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
                 <div className="action-bar-button-spacer"/>
                 <ActionBarButton buttonType='feature' mode={PoolMessageMode.FILE} icon={FileIcon} messageMode={messageMode} setMessageMode={setMessageMode}/>
                 <ActionBarButton buttonType='feature' mode={PoolMessageMode.TEXT} icon={TextMessageIcon} messageMode={messageMode} setMessageMode={setMessageMode}/>
+            </motion.div>
+            <motion.div className="pool-status-container" initial={{ y: -100 }} animate={{ y: (pool?.connectionState == PoolConnectionState.RECONNECTING ? 20 : -100) }}> 
+                <div className="pool-status pool-status-disconnected">
+                    <img className="pool-status-img" src={DisconnectedIcon} />
+                    Lost Connection. Reconnecting...
+                </div>
             </motion.div>
         </div>
     )

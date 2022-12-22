@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
 import { fileSizeToString, kibibytesToBytes, mebibytesToBytes } from "../helpers/file-size";
-import { poolAction, RemoveDownloadAction, SetMediaURLAction, UpdateDownloadProgressAction } from "../store/slices/pool.slice";
+import { poolAction, RemoveDownloadAction, UpdateDownloadProgressAction } from "../store/slices/pool.slice";
 import { getStoreState, store } from "../store/store";
 import { FileManager, PoolManager } from "./global";
 import { getCacheChunkNumberFromChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
@@ -14,14 +14,14 @@ import { APP_TYPE } from "../config/env";
 const WebworkerPromise = require('webworker-promise');
 const worker = new WebworkerPromise(new PoolWorker());
 
-export interface FileOffer extends PoolFileInfo {
+export interface FileOfferData extends PoolFileInfo {
     file: File;
 }
 
 interface FileDownload {
     poolID: string;
     poolKey: number;
-    poolFileInfo: PoolFileInfo;
+    fileInfo: PoolFileInfo;
     lastModified: number;
     lastProgress: number;
     totalChunks: number;
@@ -57,7 +57,7 @@ export class FileManagerClass {
     private fileSystemAccess: boolean;
     private downloadLink?: HTMLAnchorElement;
     private currentFileDownloadSize: number; // size of fileDownloads and fileStore
-    private fileOffers: Map<string, Map<string, FileOffer>>; // key: PoolID, key: fileID
+    private fileOffers: Map<string, Map<string, FileOfferData>>; // key: PoolID, key: fileID
     private fileDownloads: Map<string, FileDownload>; // key: fileID
     private fileDownloadTimer: NodeJS.Timer | undefined;
     private fileCacheChunks: Map<string, CacheChunk>; // key: fileID
@@ -79,7 +79,7 @@ export class FileManagerClass {
             this.downloadLink.style.display = 'none';
             document.body.appendChild(this.downloadLink);
         }
-        this.fileOffers = new Map<string, Map<string, FileOffer>>;
+        this.fileOffers = new Map<string, Map<string, FileOfferData>>;
         this.fileDownloads = new Map<string, FileDownload>;
         this.fileDownloadTimer = undefined;
         this.currentFileDownloadSize = 0;
@@ -153,7 +153,7 @@ export class FileManagerClass {
                     }
                     if (chunksMissing.length != 0) {
                         console.log("CHUNKS MISSING:", chunksMissing);
-                        PoolManager.sendRequestFileToPool(fileDownload.poolID, fileDownload.poolFileInfo, fileDownload.isMedia, chunksMissing);
+                        PoolManager.sendRequestFileToPool(fileDownload.poolID, fileDownload.fileInfo, fileDownload.isMedia, chunksMissing);
                     }
                 }
             });
@@ -184,10 +184,10 @@ export class FileManagerClass {
 
     initPoolFileOffers(poolID: string): Promise<void> {
         if (APP_TYPE == 'desktop' || this.fileOffers.has(poolID)) return Promise.resolve();
-        return this.webworker.exec('getPoolFileOffers', poolID).then(async (fileOffers: FileOffer[]) => {
+        return this.webworker.exec('getPoolFileOffers', poolID).then(async (fileOffers: FileOfferData[]) => {
             let poolFileOffers = this.fileOffers.get(poolID);
             if (!poolFileOffers) {
-                poolFileOffers = new Map<string, FileOffer>;
+                poolFileOffers = new Map<string, FileOfferData>;
                 this.fileOffers.set(poolID, poolFileOffers);
             }
             //let updatedFileOffers = false;
@@ -215,11 +215,11 @@ export class FileManagerClass {
         if (file.size == 0) return false;
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) {
-            poolFileOffers = new Map<string, FileOffer>;
+            poolFileOffers = new Map<string, FileOfferData>;
             this.fileOffers.set(poolID, poolFileOffers);
         }
         if (!poolFileOffers.has(fileInfo.fileID)) {
-            let fileOffer: FileOffer = {
+            let fileOffer: FileOfferData = {
                 ...fileInfo,
                 file: file,
             };
@@ -241,13 +241,13 @@ export class FileManagerClass {
         return poolFileOffers.has(fileID);
     }
 
-    getFileOffer(poolID: string, fileID: string): FileOffer | undefined {
+    getFileOffer(poolID: string, fileID: string): FileOfferData | undefined {
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) return undefined;
         return poolFileOffers.get(fileID);
     }
 
-    removeFileoffer(poolID: string, fileID: string) {
+    removeFileOffer(poolID: string, fileID: string) {
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) return;
         let fileOffer = poolFileOffers.get(fileID);
@@ -261,7 +261,7 @@ export class FileManagerClass {
         }
     }
 
-    getFileOffers(poolID: string): FileOffer[] | undefined  {
+    getFileOffers(poolID: string): FileOfferData[] | undefined  {
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) return undefined;
         return Array.from(poolFileOffers.values());
@@ -277,9 +277,9 @@ export class FileManagerClass {
         return this.fileDownloads.has(fileID);
     }
 
-    async addFileDownload(poolID: string, poolKey: number, poolFileInfo: PoolFileInfo, isMedia: boolean): Promise<boolean> {
-        if (!this.checkFileSizeLimit(poolFileInfo.totalSize)) return false;
-        if (this.fileDownloads.has(poolFileInfo.fileID)) return true;
+    async addFileDownload(poolID: string, poolKey: number, fileInfo: PoolFileInfo, isMedia: boolean): Promise<boolean> {
+        if (!this.checkFileSizeLimit(fileInfo.totalSize)) return false;
+        if (this.fileDownloads.has(fileInfo.fileID)) return true;
         let directoryHandle = undefined;
         let fileHandle = undefined;
         let fileStream = undefined;
@@ -290,7 +290,7 @@ export class FileManagerClass {
                     mode: "readwrite",
                     startIn: "documents",
                 } as DirectoryPickerOptions);
-                fileHandle = await directoryHandle.getFileHandle(Date.now().toString() + "-" + poolFileInfo.fileName, {
+                fileHandle = await directoryHandle.getFileHandle(Date.now().toString() + "-" + fileInfo.fileName, {
                     create: true,
                 } as FileSystemGetFileOptions);
                 fileStream = await fileHandle.createWritable();
@@ -300,15 +300,15 @@ export class FileManagerClass {
                 return false;
             }
         } else {
-            this.currentFileDownloadSize += poolFileInfo.totalSize;
+            this.currentFileDownloadSize += fileInfo.totalSize;
         }
         let chunksDownloadedMap = [];
-        let totalChunks = Math.ceil(poolFileInfo.totalSize / CHUNK_SIZE);
+        let totalChunks = Math.ceil(fileInfo.totalSize / CHUNK_SIZE);
         chunksDownloadedMap[totalChunks - 1] = false;
-        this.fileDownloads.set(poolFileInfo.fileID, {
+        this.fileDownloads.set(fileInfo.fileID, {
             poolID: poolID,
             poolKey: poolKey,
-            poolFileInfo: poolFileInfo,
+            fileInfo: fileInfo,
             lastModified: Date.now(),
             totalChunks: totalChunks,
             chunksDownloaded: 0,
@@ -317,7 +317,7 @@ export class FileManagerClass {
             isMedia: isMedia,
             fileHandle: fileHandle,
             fileStream: fileStream,
-            memoryChunks: fileStream ? undefined : new Uint8Array(poolFileInfo.totalSize),
+            memoryChunks: fileStream ? undefined : new Uint8Array(fileInfo.totalSize),
         } as FileDownload);
         this.startFileDownloadTimer();
         console.log("Downloading...", Date.now())
@@ -352,7 +352,7 @@ export class FileManagerClass {
             fileDownload.lastProgress = progress;
             store.dispatch(poolAction.updateDownloadProgress({
                 key: fileDownload.poolKey,
-                fileID: fileDownload.poolFileInfo.fileID,
+                fileID: fileDownload.fileInfo.fileID,
                 progress: progress,
             } as UpdateDownloadProgressAction));
         }
@@ -371,7 +371,7 @@ export class FileManagerClass {
                 fileDownload.fileStream?.close().then(() => {            
                     fileDownload?.fileHandle?.getFile().then((file) => {
                         if (!fileDownload) return;
-                        PoolManager.sendFileOfferToPool(fileDownload.poolID, file, fileDownload.poolFileInfo.fileID, fileDownload.poolFileInfo.originNodeID);
+                        PoolManager.sendFileOfferToPool(fileDownload.poolID, file, fileDownload.fileInfo.fileID, fileDownload.fileInfo.originNodeID);
                     });
                 });
             } else {
@@ -382,13 +382,13 @@ export class FileManagerClass {
             }
         } else {
             if (!fileDownload.memoryChunks) return;
-            this.currentFileDownloadSize -= fileDownload.poolFileInfo.totalSize;
+            this.currentFileDownloadSize -= fileDownload.fileInfo.totalSize;
             if (fileDownload.chunksDownloaded == fileDownload.totalChunks) {
                 let blob = new Blob([fileDownload.memoryChunks]);
                 if (fileDownload.isMedia) {
                     this.addMediaCache(fileID, blob);
                 } else {
-                    this.downloadFile(fileDownload.poolFileInfo.fileName, blob);
+                    this.downloadFile(fileDownload.fileInfo.fileName, blob);
                 }
             }
             fileDownload.memoryChunks = undefined;
@@ -396,9 +396,9 @@ export class FileManagerClass {
 
         store.dispatch(poolAction.removeDownload({
             key: fileDownload!.poolKey,
-            fileID: fileDownload!.poolFileInfo.fileID,
+            fileID: fileDownload!.fileInfo.fileID,
         } as RemoveDownloadAction))
-        PoolManager.completeFileDownload(fileDownload.poolID, fileDownload.poolFileInfo.fileID);
+        PoolManager.completeFileDownload(fileDownload.poolID, fileDownload.fileInfo.fileID);
         
         this.fileDownloads.delete(fileID);
     }

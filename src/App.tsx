@@ -19,9 +19,9 @@ dispatch(poolAction.initPools([
       UserID: "TEST_USER_ID",
       DisplayName: "TEST_USER",
       Devices: [getStoreState().profile.device, {
-        deviceID: "OTHER_DEVICE_ID",
-        deviceType: DeviceType.DESKTOP,
-        deviceName: "OTHER_DEVICE_NAME",
+        DeviceID: "OTHER_DEVICE_ID",
+        DeviceType: DeviceType.DESKTOP,
+        DeviceName: "OTHER_DEVICE_NAME",
       }],
     } ],
     Settings: {

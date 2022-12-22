@@ -10,7 +10,7 @@ export function initializePool(poolID: string, poolKey: number): PoolClient {
     var wsMsg: SSMessage;
     var heartbeatInterval: any = undefined;
     var heartbeatTimeout: any = undefined;
-    var ws: WebSocket = new WebSocket(WSHOST + "?poolid=" + poolID);
+    var ws: WebSocket = new WebSocket(WSHOST + "?poolid=" + poolID + "&displayname=" + "CHANGE_THIS_DISPLAY_NAME");
     var poolClient: PoolClient = new PoolClient(poolID, poolKey, ws);
 
     window.MainPoolClient = poolClient;
@@ -79,7 +79,7 @@ function handleSSMessage(pool: PoolClient, msg: SSMessage) {
         });
         break;
     case 2002:
-        pool.disconnectNode(msg.TargetNodeID, msg.Data)
+        pool.disconnectNode(msg.TargetNodeID)
         SendSSMessage(pool.ws, 2002, undefined, msg);
         break;
     case 2003:
@@ -97,11 +97,19 @@ function handleSSMessage(pool: PoolClient, msg: SSMessage) {
         });
         break;
     case 2005:
-        if (pool.verifyConnection(msg)) {
+        if (pool.verifyConnection(msg.TargetNodeID)) {
             SendSSMessage(pool.ws, 2005, { Status: SSStatus.SUCCESSFUL } as SSNodeStatusData, msg);
         } else {
             SendSSMessage(pool.ws, 2005, { Status: SSStatus.UNSUCCESSFUL } as SSNodeStatusData, msg);
         }
+        break;
+    case 2010:
+        pool.addNodes(msg.Data);
+        SendSSMessage(pool.ws, 2010, undefined, msg);
+        break;
+    case 2011:
+        pool.removeNode(msg.Data);
+        SendSSMessage(pool.ws, 2010, undefined, msg);
         break;
     }
 }

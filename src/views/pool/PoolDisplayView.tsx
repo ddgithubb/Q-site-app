@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { useState, useRef, memo, MouseEventHandler } from 'react'
 import { CircularProgressbar } from 'react-circular-progressbar'
 import { fileSizeToString } from '../../helpers/file-size'
-import { PoolManager } from '../../pool/global'
+import { FileManager, PoolManager } from '../../pool/global'
 import { Pool, PoolConnectionState, PoolDownloadProgressStatus, PoolFileInfo, PoolUser } from '../../pool/pool.model'
 import { IndicatorDot } from '../components/IndicatorDot'
 import { PoolDisplayUsersView } from './PoolDisplayUsersView'
@@ -115,8 +115,8 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                         pool.downloadQueue.map((fileProgress) => (
                             <div 
                                 className="display-cancel-button-container display-downloading-file-container" 
-                                onClick={() => PoolManager.sendRemoveFileRequest(pool.PoolID, fileProgress)}
-                                key={fileProgress.fileID}>
+                                onClick={() => PoolManager.sendRemoveFileRequest(pool.PoolID, fileProgress.fileOffer)}
+                                key={fileProgress.fileOffer.fileID}>
                                 <div className="display-downloading-file display-cancel-button-child">
                                     <div className="display-downloading-file-progress">
                                         <CircularProgressbar 
@@ -132,7 +132,7 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                                             }} />
                                     </div>
                                     <div className="display-downloading-file-name">
-                                        {fileProgress.fileName}
+                                        {fileProgress.fileOffer.fileName}
                                     </div>
                                 </div>
                                 <img className="display-cancel-button-icon" src={CancelIcon}/>
@@ -192,7 +192,7 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                 </div>
                 {/* delete file(s) button with function to delete multiple files by just clicking*/}
                 {
-                    pool.myNode.fileOffers?.map((poolFileInfo) => (
+                    FileManager.getFileOffers(pool.PoolID)?.map((poolFileInfo) => (
                         <div className="display-cancel-button-container" key={poolFileInfo.fileID} onClick={() => sendRetractFileOffer(poolFileInfo.fileID)}>
                             <div className="display-file-container display-cancel-button-child">
                                 <img src={FileIcon} height={22} width={22} />
@@ -201,7 +201,7 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                             </div>
                             <img className="display-cancel-button-icon" src={CancelIcon}/>
                         </div>
-                    )) 
+                    ))
                 }
             </div>
             <PoolDisplayUsersView poolID={pool.PoolID || ""} users={pool.Users || []} userMap={userMap} hidden={messageMode != PoolMessageMode.USERS}/>

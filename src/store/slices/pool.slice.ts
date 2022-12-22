@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE, DEFAULT_RECV_MESSAGES_CACHE } from "../../config/caching";
-import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser, PoolFileInfo, isMediaType, PoolFileProgress, PoolDownloadProgressStatus, PoolMessageView } from "../../pool/pool.model";
+import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser, PoolFileInfo, isMediaType, PoolFileProgress, PoolDownloadProgressStatus, PoolMessage, PoolNodeInfo, PoolDevice, PoolFileOffer, PoolFileOfferAndSeeders } from "../../pool/pool.model";
 
 export interface PoolsState {
     pools: Pool[];
@@ -14,16 +14,23 @@ export interface PoolAction {
     key: number;
 }
 
+export interface ResetPoolAction extends PoolAction {
+}
+
 export interface UpdateConnectionStateAction extends PoolAction {
     state: PoolConnectionState;
 }
 
+export interface UpdateUserAction extends PoolAction {
+    nodeInfo: PoolNodeInfo;
+}
+
 export interface AddMessageAction extends PoolAction {
-    message: PoolMessageView;
+    message: PoolMessage;
 }
 
 export interface AddFileOfferAction extends PoolAction {
-    fileOffer: PoolFileInfo;
+    fileOffer: PoolFileOffer;
 }
 
 export interface RemoveFileOfferAction extends PoolAction {
@@ -39,9 +46,9 @@ export interface RemoveActiveNodeAction extends PoolAction {
     nodeID: string;
 }
 
-export interface UpdateActiveNodesAction extends PoolAction {
-    activeNodes: PoolNode[];
-}
+// export interface UpdateActiveNodesAction extends PoolAction {
+//     activeNodes: PoolNode[];
+// }
 
 export interface AddDownloadAction extends PoolAction {
     fileInfo: PoolFileInfo;
@@ -54,16 +61,12 @@ export interface UpdateDownloadProgressAction extends PoolAction {
 
 export interface UpdateDownloadProgressStatusAction extends PoolAction {
     fileID: string;
+    seederNodeID: string;
     status: PoolDownloadProgressStatus;
 }
 
 export interface RemoveDownloadAction extends PoolAction {
     fileID: string;
-}
-
-export interface SetMediaURLAction extends PoolAction {
-    fileID: string;
-    mediaURL: string;
 }
 
 const poolSlice = createSlice({
@@ -89,14 +92,14 @@ const poolSlice = createSlice({
         },
         clearPool(state: PoolsState, action: PayloadAction<PoolAction>) {
             let pool = getPool(state, action);
-            pool.myNode = {} as PoolNode;
+            //pool.myNode = {} as PoolNode;
             pool.activeNodes = [];
             pool.downloadQueue = [];
             pool.messages = [];
         },
-        resetPool(state: PoolsState, action: PayloadAction<AddActiveNodeAction>) {
+        resetPool(state: PoolsState, action: PayloadAction<ResetPoolAction>) {
             let pool = getPool(state, action);
-            pool.myNode = action.payload.node;
+            //pool.myNode = action.payload.node;
             pool.activeNodes = [];
             // pool.downloadQueue = [];
             pool.messages = [];
@@ -112,13 +115,54 @@ const poolSlice = createSlice({
                 // }
             }
         },
-        updateActiveNodes(state: PoolsState, action: PayloadAction<UpdateActiveNodesAction>) {
+        // updateActiveNodes(state: PoolsState, action: PayloadAction<UpdateActiveNodesAction>) {
+        //     let pool = getPool(state, action);
+        //     pool.activeNodes = action.payload.activeNodes;
+        // },
+        updateUser(state: PoolsState, action: PayloadAction<UpdateUserAction>) {
             let pool = getPool(state, action);
-            pool.activeNodes = action.payload.activeNodes;
+            let nodeInfo = action.payload.nodeInfo;
+            let foundUser = false;
+            for (const user of pool.Users) {
+                if (user.UserID == nodeInfo.UserID) {
+                    user.DisplayName = nodeInfo.DisplayName;
+                    let foundDevice = false;
+                    for (const device of user.Devices) {
+                        if (device.DeviceID == nodeInfo.DeviceID) {
+                            device.DeviceName = nodeInfo.DeviceName;
+                            device.DeviceType = nodeInfo.DeviceType;
+                            foundDevice = true;
+                            break;
+                        }
+                    }
+                    if (!foundDevice) {
+                        let device: PoolDevice = {
+                            DeviceID: nodeInfo.DeviceID,
+                            DeviceType: nodeInfo.DeviceType,
+                            DeviceName: nodeInfo.DeviceName,
+                        }
+                        user.Devices.push(device);
+                    }
+                    foundUser = true;
+                    break;
+                }
+            }
+            if (!foundUser) {
+                let user: PoolUser = {
+                    UserID: nodeInfo.UserID,
+                    DisplayName: nodeInfo.DisplayName,
+                    Devices: [{
+                        DeviceID: nodeInfo.DeviceID,
+                        DeviceType: nodeInfo.DeviceType,
+                        DeviceName: nodeInfo.DeviceName,
+                    }],
+                }
+                pool.Users.push(user);
+            }
         },
         addMessage(state: PoolsState, action: PayloadAction<AddMessageAction>) {
             let pool = getPool(state, action);
-            let msg: PoolMessageView = action.payload.message;
+            let msg: PoolMessage = action.payload.message;
             //console.log("ADDING MESSAGE", msg, pool.messages[0]?.created)
             if (pool.messages.length == 0) {
                 pool.messages.push(msg);
@@ -134,13 +178,30 @@ const poolSlice = createSlice({
             //     pool.messages.shift();
             // }
         },
+        addActiveNode(state: PoolsState, action: PayloadAction<AddActiveNodeAction>) {
+            let pool = getPool(state, action);
+            // if (action.payload.myNode) {
+            //     pool.myNode = action.payload.node;
+            // }
+            pool.activeNodes.push(action.payload.node);
+        },
+        removeActiveNode(state: PoolsState, action: PayloadAction<RemoveActiveNodeAction>) {
+            let pool = getPool(state, action);
+            let userID = "";
+            for (let i = 0; i < pool.activeNodes.length; i++) {
+                if (pool.activeNodes[i].nodeID == action.payload.nodeID) {
+                    userID = pool.activeNodes[i].userID;
+                    pool.activeNodes.splice(i, 1);
+                }
+            }
+        },
         addFileOffer(state: PoolsState, action: PayloadAction<AddFileOfferAction>) {
             let pool = getPool(state, action);
-            if (action.payload.fileOffer.nodeID == pool.myNode.nodeID) {
-                pool.myNode.fileOffers.unshift(action.payload.fileOffer);
-            }
+            // if (action.payload.fileOffer.nodeID == pool.myNode.nodeID) {
+            //     pool.myNode.fileOffers.unshift(action.payload.fileOffer);
+            // }
             for (const node of pool.activeNodes) {
-                if (node.nodeID == action.payload.fileOffer.nodeID) {
+                if (node.nodeID == action.payload.fileOffer.seederNodeID) {
                     node.fileOffers.unshift(action.payload.fileOffer);
                     break;
                 }
@@ -148,13 +209,13 @@ const poolSlice = createSlice({
         },
         removeFileOffer(state: PoolsState, action: PayloadAction<RemoveFileOfferAction>) {
             let pool = getPool(state, action);
-            if (action.payload.nodeID == pool.myNode.nodeID) {
-                for (let i = 0; i < pool.myNode.fileOffers.length; i++) {
-                    if (pool.myNode.fileOffers[i].fileID == action.payload.fileID) {
-                        pool.myNode.fileOffers.splice(i, 1);
-                    }
-                }
-            }
+            // if (action.payload.nodeID == pool.myNode.nodeID) {
+            //     for (let i = 0; i < pool.myNode.fileOffers.length; i++) {
+            //         if (pool.myNode.fileOffers[i].fileID == action.payload.fileID) {
+            //             pool.myNode.fileOffers.splice(i, 1);
+            //         }
+            //     }
+            // }
             for (const node of pool.activeNodes) {
                 if (node.nodeID == action.payload.nodeID) {
                     for (let i = 0; i < node.fileOffers.length; i++) {
@@ -166,62 +227,6 @@ const poolSlice = createSlice({
                 }
             }
         },
-        addActiveNode(state: PoolsState, action: PayloadAction<AddActiveNodeAction>) {
-            let pool = getPool(state, action);
-            pool.activeNodes.push(action.payload.node);
-            // for (let i = 0; i < pool.Users.length; i++) {
-            //     if (pool.Users[i].UserID == action.payload.node.userID) {
-            //         if (pool.Users[i].activeNodes == undefined) {
-            //             pool.Users[i].activeNodes = [action.payload.node];
-            //             let tempUser = pool.Users[i];
-            //             pool.Users.splice(i, 1);
-            //             pool.Users.unshift(tempUser);
-            //         } else {
-            //             pool.Users[i].activeNodes?.push(action.payload.node);
-            //         }
-            //         break;
-            //     }
-            //}
-        },
-        removeActiveNode(state: PoolsState, action: PayloadAction<RemoveActiveNodeAction>) {
-            let pool = getPool(state, action);
-            let userID = "";
-            for (let i = 0; i < pool.activeNodes.length; i++) {
-                if (pool.activeNodes[i].nodeID == action.payload.nodeID) {
-                    userID = pool.activeNodes[i].userID;
-                    pool.activeNodes.splice(i, 1);
-                }
-            }
-
-            // if (userID != "") {
-            //     for (let i = 0; i < pool.Users.length; i++) {
-            //         if (pool.Users[i].UserID == userID) {
-            //             if (!pool.Users[i].activeNodes) break;
-            //             for (let j = 0; j < pool.Users[i].activeNodes!.length; j++) {
-            //                 if (pool.Users[i].activeNodes![j].nodeID == action.payload.nodeID) {
-            //                     pool.Users[i].activeNodes!.splice(j, 1);
-            //                     if (pool.Users[i].activeNodes?.length == 0) {
-            //                         pool.Users[i].activeNodes = undefined;
-            //                         let tempUser = pool.Users[i];
-            //                         pool.Users.splice(i, 1);
-            //                         let found = false;
-            //                         for (let i = pool.Users.length - 1; i >= 0; i--) {
-            //                             if (pool.Users[i].activeNodes || tempUser.DisplayName >= pool.Users[i].DisplayName) {
-            //                                 pool.Users.splice(i + 1, 0, tempUser);
-            //                                 found = true;
-            //                                 break;
-            //                             }
-            //                         }
-            //                         if (!found) pool.Users.unshift(tempUser);
-            //                         break;
-            //                     }
-            //                 }
-            //             }
-            //             break;
-            //         }
-            //     }
-            // }
-        },
         addDownload(state: PoolsState, action: PayloadAction<AddDownloadAction>) {
             let pool = getPool(state, action);
             // for (let i = 0; i < pool.downloadQueue.length; i++) {
@@ -232,7 +237,7 @@ const poolSlice = createSlice({
             //     }
             // }
             let poolFileProgress: PoolFileProgress = {
-                ...action.payload.fileInfo,
+                fileOffer: { ...action.payload.fileInfo, seederNodeID: "" },
                 progress: 0,
                 status: PoolDownloadProgressStatus.DOWNLOADING,
             };
@@ -241,7 +246,7 @@ const poolSlice = createSlice({
         updateDownloadProgress(state: PoolsState, action: PayloadAction<UpdateDownloadProgressAction>) {
             let pool = getPool(state, action);
             for (let i = 0; i < pool.downloadQueue.length; i++) {
-                if (pool.downloadQueue[i].fileID == action.payload.fileID) {
+                if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
                     pool.downloadQueue[i].progress = action.payload.progress;
                     return;
                 }
@@ -250,7 +255,8 @@ const poolSlice = createSlice({
         updateDownloadProgressStatus(state: PoolsState, action: PayloadAction<UpdateDownloadProgressStatusAction>) {
             let pool = getPool(state, action);
             for (let i = 0; i < pool.downloadQueue.length; i++) {
-                if (pool.downloadQueue[i].fileID == action.payload.fileID) {
+                if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
+                    pool.downloadQueue[i].fileOffer.seederNodeID = action.payload.seederNodeID;
                     pool.downloadQueue[i].status = action.payload.status;
                     return;
                 }
@@ -259,7 +265,7 @@ const poolSlice = createSlice({
         removeDownload(state: PoolsState, action: PayloadAction<RemoveDownloadAction>) {
             let pool = getPool(state, action);
             for (let i = 0; i < pool.downloadQueue.length; i++) {
-                if (pool.downloadQueue[i].fileID == action.payload.fileID) {
+                if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
                     pool.downloadQueue.splice(i, 1);
                     return;
                 }

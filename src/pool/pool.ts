@@ -1,7 +1,7 @@
 import { HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TIMEOUT_SECONDS, WSHOST } from "../config/http";
 import { SSLwtMessage, SSMessage } from "./sync-server.model";
 import { PoolClient } from "./pool-client";
-import { FILE_ID_LENGTH, Pool, PoolChunkRange, PoolConnectionState, PoolFileInfo, PoolImageInfo, PoolMessageDestinationInfo } from "./pool.model";
+import { FILE_ID_LENGTH, Pool, PoolChunkRange, PoolConnectionState, PoolFileInfo, PoolFileOffer, PoolImageOffer, PoolMessageDestinationInfo } from "./pool.model";
 import { store } from "../store/store";
 import { poolAction, UpdateConnectionStateAction } from "../store/slices/pool.slice";
 import { initializePool } from "./sync-server-client";
@@ -69,10 +69,10 @@ export class PoolManagerClass {
         return true;
     }
 
-    sendRequestFileToPool(poolID: string, poolFileInfo: PoolFileInfo, isMedia: boolean = false, chunksMissing?: PoolChunkRange[]): boolean {
+    sendRequestFileToPool(poolID: string, fileInfo: PoolFileInfo, isMedia: boolean = false, chunksMissing?: PoolChunkRange[]): boolean {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
-        poolClient.sendRequestFile(poolFileInfo, isMedia, chunksMissing);
+        poolClient.sendRequestFile(fileInfo, isMedia, chunksMissing);
         return true;
     }
     
@@ -83,10 +83,10 @@ export class PoolManagerClass {
         return true;
     }
 
-    sendRemoveFileRequest(poolID: string, fileInfo: PoolFileInfo): boolean {
+    sendRemoveFileRequest(poolID: string, fileOffer: PoolFileOffer): boolean {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
-        poolClient.sendRemoveFileRequest(fileInfo);
+        poolClient.sendRemoveFileRequest(fileOffer);
         return true;
     }
 

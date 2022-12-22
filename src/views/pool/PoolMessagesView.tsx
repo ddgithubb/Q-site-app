@@ -3,7 +3,7 @@ import sanitizeHtml from 'sanitize-html';
 import { fileSizeToString } from '../../helpers/file-size';
 import { formatDate, formatTime, minutesToMillisecond } from '../../helpers/time';
 import { FileManager, PoolManager } from '../../pool/global';
-import { PoolFileInfo, PoolMessageType, PoolMessageView, PoolNodeState, PoolUser } from '../../pool/pool.model';
+import { PoolFileInfo, PoolMessageType, PoolMessage, PoolNodeState, PoolUser, PoolUpdateNodeState, PoolFileOffer, PoolImageOffer } from '../../pool/pool.model';
 import './PoolMessagesView.css'
 
 import DownloadIcon from '../../assets/download.png';
@@ -34,7 +34,7 @@ window.addEventListener("resize", calcMessageBounds);
 
 export interface PoolMessagesViewParams {
     poolID: string;
-    messages: PoolMessageView[];
+    messages: PoolMessage[];
     userMap: Map<string, PoolUserActiveDevices>;
 }
 
@@ -123,13 +123,13 @@ function PoolMessagesViewComponent({ poolID, messages, userMap }: PoolMessagesVi
         }
     }
 
-    const requestFile = (poolFileInfo: PoolFileInfo) => {
-        PoolManager.sendRequestFileToPool(poolID, poolFileInfo);
+    const requestFile = (fileInfo: PoolFileInfo) => {
+        PoolManager.sendRequestFileToPool(poolID, fileInfo);
     }
 
-    const requestImage = (poolInfo: PoolFileInfo) => {
-        if (FileManager.hasFileDownload(poolInfo.fileID)) return;
-        PoolManager.sendRequestFileToPool(poolID, poolInfo, true);
+    const requestImage = (fileInfo: PoolFileInfo) => {
+        if (FileManager.hasFileDownload(fileInfo.fileID)) return;
+        PoolManager.sendRequestFileToPool(poolID, fileInfo, true);
     }
 
     return (
@@ -138,73 +138,96 @@ function PoolMessagesViewComponent({ poolID, messages, userMap }: PoolMessagesVi
                 <div className="pool-message-status">No saved messages beyond this point</div>
             </div>
             {
-                poolMessagesView.map((msg, index) => (
-                    <div className="pool-message-container" key={msg.msgID}>
-                        {
-                            (
-                                index == 0 || 
-                                // msg.nodeID != pool.messages[index - 1].nodeID || should be deviceID
-                                msg.created - messages[index - 1].created > CONSISTENT_MESSAGE_INTERVAL ||
-                                (messages[index - 1].type != PoolMessageType.TEXT && 
-                                messages[index - 1].type != PoolMessageType.FILE && 
-                                messages[index - 1].type != PoolMessageType.IMAGE)
-                            )
-                            && (msg.type == PoolMessageType.TEXT || msg.type == PoolMessageType.FILE || msg.type == PoolMessageType.IMAGE)
-                            ? (
-                                <div className="pool-message-info-bar">
-                                    <div className="pool-message-name">
-                                        {userMap.get(msg.userID)?.user.DisplayName}
-                                    </div>
-                                    <div className="pool-message-date">
-                                        {formatDate(msg.created)}
-                                    </div>
+                poolMessagesView.map((msg, index) => {
+                    let messageContentElement: JSX.Element = <></>;
+
+                    switch (msg.type) {
+                        case PoolMessageType.NODE_STATUS:
+                            let nodeState: PoolUpdateNodeState = msg.data;
+                            messageContentElement =
+                                <div className="pool-message-node-status">
+                                    {nodeState.nodeID} {userMap.get(nodeState.userID)?.user.DisplayName} has {nodeState.state == PoolNodeState.ACTIVE ? "joined" : "left"}
                                 </div>
-                            ) : (
-                                <div className="pool-message-date pool-message-portable-date">{formatTime(msg.created)}</div>
-                            )
-                        }
-                        {
-                            msg.type == PoolMessageType.SIGNAL_STATUS ? (
-                                <div className="pool-message-node-status">{msg.data.nodeID} {userMap.get(msg.data.userID)?.user.DisplayName} has {msg.data.state == PoolNodeState.ACTIVE ? "joined" : "left"}</div>
-                            ) : msg.type == PoolMessageType.TEXT ? (
-                                <div className="pool-message-text" dangerouslySetInnerHTML={{ __html: sanitizeHtml(msg.data, { allowedTags: [ 'br' ] }) }}/>
-                            ) : msg.type == PoolMessageType.FILE ? (
+                            break;
+                        case PoolMessageType.TEXT:
+                            let text: string = msg.data;
+                            messageContentElement = 
+                                <div className="pool-message-text" dangerouslySetInnerHTML={{ __html: sanitizeHtml(text, { allowedTags: [ 'br' ] }) }}/>
+                            break;
+                        case PoolMessageType.FILE_OFFER:
+                            let fileOffer: PoolFileOffer = msg.data;
+                            messageContentElement = 
                                 <div className="pool-message-file-data-container">
-                                    <div className="pool-message-file-container" onClick={() => requestFile(msg.data)}>
+                                    <div className="pool-message-file-container" onClick={() => requestFile(fileOffer)}>
                                         <img src={FileIcon} width={35} height={35} />
-                                        <span className="pool-message-file-name">{msg.data.fileName}</span>
-                                        <span className="pool-message-file-size">{fileSizeToString(msg.data.totalSize)}</span>
+                                        <span className="pool-message-file-name">{fileOffer.fileName}</span>
+                                        <span className="pool-message-file-size">{fileSizeToString(fileOffer.totalSize)}</span>
                                     </div>
                                 </div>
-                            ) : msg.type == PoolMessageType.IMAGE ? (
+                            break;
+                        case PoolMessageType.IMAGE_OFFER:
+                            let imageOffer: PoolImageOffer = msg.data;
+                            messageContentElement = 
                                 <>
                                     <div className="pool-message-image-container">
                                         <div className="pool-message-image-sub-container">
-                                            <img loading="lazy" className={"pool-message-image" + (!FileManager.hasMediaCache(msg.data.fileInfo.fileID) ? " pool-message-image-preview-blur" : "")} src={FileManager.getMediaCache(msg.data.fileInfo.fileID) || msg.data.previewImage} height={Math.min(400, (msg.data.height / msg.data.width) * Math.min(400, msg.data.width))} />
+                                            <img 
+                                                loading="lazy" 
+                                                className={"pool-message-image" + (!FileManager.hasMediaCache(imageOffer.fileID) ? " pool-message-image-preview-blur" : "")} 
+                                                src={FileManager.getMediaCache(imageOffer.fileID) || imageOffer.previewImage} 
+                                                height={Math.min(400, (imageOffer.height / imageOffer.width) * Math.min(400, imageOffer.width))} />
                                             {
-                                                !FileManager.hasMediaCache(msg.data.fileInfo.fileID) ? (
-                                                    <div className="pool-message-image-missing-container" onClick={() => requestImage(msg.data.fileInfo)}>
-                                                        {FileManager.hasFileDownload(msg.data.fileInfo.fileID) ? "Requesting..." : "Request Image"}
+                                                !FileManager.hasMediaCache(imageOffer.fileID) ? (
+                                                    <div className="pool-message-image-missing-container" onClick={() => requestImage(imageOffer)}>
+                                                        {FileManager.hasFileDownload(imageOffer.fileID) ? "Requesting..." : "Request Image"}
                                                     </div>
                                                 ) : undefined
                                             }
                                         </div>
                                     </div>
                                     {
-                                        FileManager.hasMediaCache(msg.data.fileInfo.fileID) ? (
+                                        FileManager.hasMediaCache(imageOffer.fileID) ? (
                                             <div className="pool-message-image-download-container">
                                                 <img className="pool-message-image-download-icon" src={DownloadIcon} />
-                                                <div className="pool-message-image-download-filename" onClick={() => requestFile(msg.data.fileInfo)}>
-                                                    {msg.data.fileInfo.fileName} {" (" + fileSizeToString(msg.data.fileInfo.totalSize) + ")"}
+                                                <div className="pool-message-image-download-filename" onClick={() => requestFile(imageOffer)}>
+                                                    {imageOffer.fileName} {" (" + fileSizeToString(imageOffer.totalSize) + ")"}
                                                 </div>
                                             </div>
                                         ) : undefined
                                     }
                                 </>
-                            ) : undefined
-                        }
-                    </div>
-                ))
+                            break;
+                    }
+
+                    return (
+                        <div className="pool-message-container" key={msg.msgID}>
+                            {
+                                (
+                                    index == 0 || 
+                                    // msg.nodeID != pool.messages[index - 1].nodeID || should be deviceID
+                                    msg.created - messages[index - 1].created > CONSISTENT_MESSAGE_INTERVAL ||
+                                    (messages[index - 1].type != PoolMessageType.TEXT && 
+                                    messages[index - 1].type != PoolMessageType.FILE_OFFER && 
+                                    messages[index - 1].type != PoolMessageType.IMAGE_OFFER)
+                                )
+                                && (msg.type == PoolMessageType.TEXT || msg.type == PoolMessageType.FILE_OFFER || msg.type == PoolMessageType.IMAGE_OFFER)
+                                ? (
+                                    <div className="pool-message-info-bar">
+                                        <div className="pool-message-name">
+                                            {userMap.get(msg.userID)?.user.DisplayName}
+                                        </div>
+                                        <div className="pool-message-date">
+                                            {formatDate(msg.created)}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="pool-message-date pool-message-portable-date">{formatTime(msg.created)}</div>
+                                )
+                            }
+                            { messageContentElement }
+                        </div>
+                    )
+                })
             }
             <div className="pool-end-spacer" />
         </div>
