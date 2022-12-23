@@ -30,7 +30,7 @@ export function initializePool(poolID: string, poolKey: number): PoolClient {
         }, HEARTBEAT_INTERVAL_SECONDS * 1000);
     };
     ws.onmessage = (event) => {
-        //console.log("WS MESSAGE", event.data);
+        console.log("WS MESSAGE", event.data);
         wsMsg = JSON.parse(event.data)
 
         if (wsMsg.Op >= 1000 && wsMsg.Op < 2000) {
@@ -109,7 +109,7 @@ function handleSSMessage(pool: PoolClient, msg: SSMessage) {
         break;
     case 2011:
         pool.removeNode(msg.Data);
-        SendSSMessage(pool.ws, 2010, undefined, msg);
+        SendSSMessage(pool.ws, 2011, undefined, msg);
         break;
     }
 }
@@ -130,6 +130,6 @@ export function SendSSMessage(ws: WebSocket, op: number, data?: any, prevWSMsg?:
         TargetNodeID: prevWSMsg?.TargetNodeID || targetNodeID || "",
         Data: data || null,
     }
-    //console.log("WS SEND:", JSON.stringify(msg));
+    console.log("WS SEND:", JSON.stringify(msg));
     ws.send(JSON.stringify(msg));
 }

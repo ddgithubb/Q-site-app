@@ -7,7 +7,7 @@ export const FILE_ID_LENGTH = 21;
     // only comes from SS
 // Also update how get_latest works (only fileOffers)
 export enum PoolMessageType {
-    NODE_STATUS,
+    NODE_STATE,
     GET_LATEST,
     TEXT,
     FILE_OFFER,
@@ -61,7 +61,7 @@ export interface PoolMessagePackage {
     dests?: PoolMessageDestinationInfo[];
     action: PoolMessageAction;
     partnerIntPath: number | null;
-    msg: PoolMessage
+    msg: PoolMessage;
 }
 
 export interface PoolMessageSourceInfo {

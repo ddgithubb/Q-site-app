@@ -14,22 +14,25 @@ const dispatch = store.dispatch
 dispatch(poolAction.initPools([
   {
     PoolID: "main",
-    PoolName: "TEST_POOL",
-    Users: [ {
-      UserID: "TEST_USER_ID",
-      DisplayName: "TEST_USER",
-      Devices: [getStoreState().profile.device, {
-        DeviceID: "OTHER_DEVICE_ID",
-        DeviceType: DeviceType.DESKTOP,
-        DeviceName: "OTHER_DEVICE_NAME",
-      }],
-    } ],
+    PoolName: "Pool Test",
+    Users: [],
+    Key: 0,
     Settings: {
       maxTextLength: 5000,
       maxMediaSize: mebibytesToBytes(32),
     }
   } as PoolInfo
 ]))
+
+// {
+//   UserID: "TEST_USER_ID",
+//   DisplayName: "TEST_USER",
+//   Devices: [getStoreState().profile.device, {
+//     DeviceID: "OTHER_DEVICE_ID",
+//     DeviceType: DeviceType.DESKTOP,
+//     DeviceName: "OTHER_DEVICE_NAME",
+//   }],
+// } 
 
 function App() {
 

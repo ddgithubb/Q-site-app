@@ -189,9 +189,9 @@
     font-size: 13px;
 }
 
-.display-user-accordion-container {
+/* .display-user-accordion-container {
     overflow: hidden;
-}
+} */
 
 .display-user-accordion-arrow {
     width: 15px;
@@ -204,7 +204,7 @@
 }
 
 .display-user-devices-container {
-    margin-left: 10px;
+    margin-left: 20px;
     /* max-height: 0px; */
     /* transition: max-height 0.1s ease-in-out; */
 }
@@ -212,7 +212,7 @@
 .display-user-device-container {
     display: flex;
     flex-direction: column;
-    font-size: 14px;
+    font-size: 13px;
 }
 
 .display-user-device-container-offline {

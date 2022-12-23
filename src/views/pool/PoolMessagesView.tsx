@@ -26,7 +26,7 @@ const calcMessageBounds = () => {
     MAIN_MESSAGES_TO_RENDER = MESSAGES_VIEWPORT * MESSAGES_PER_VIEWPORT
     EXTRA_MESSAGES_TO_RENDER = EXTRA_MESSAGES_VIEWPORT * MESSAGES_PER_VIEWPORT
     MAX_MESSAGES_TO_RENDER = 2 * EXTRA_MESSAGES_TO_RENDER + MAIN_MESSAGES_TO_RENDER;
-    console.log(MESSAGES_PER_VIEWPORT, MAIN_MESSAGES_TO_RENDER, EXTRA_MESSAGES_TO_RENDER, MAX_MESSAGES_TO_RENDER);
+    //console.log(MESSAGES_PER_VIEWPORT, MAIN_MESSAGES_TO_RENDER, EXTRA_MESSAGES_TO_RENDER, MAX_MESSAGES_TO_RENDER);
 };
 
 calcMessageBounds();
@@ -53,7 +53,7 @@ function PoolMessagesViewComponent({ poolID, messages, userMap }: PoolMessagesVi
     const atTopThreshold = useRef<boolean>(false);
     const atBottomThreshold = useRef<boolean>(false);
     const poolMessagesView = useMemo(() => {
-        console.log(messages.length, messageIndexThreshold, Math.max(0, messages.length - messageIndexThreshold), messages.length - messageIndexThreshold + MAX_MESSAGES_TO_RENDER);
+        //console.log(messages.length, messageIndexThreshold, Math.max(0, messages.length - messageIndexThreshold), messages.length - messageIndexThreshold + MAX_MESSAGES_TO_RENDER);
         return messages.slice(Math.max(0, messages.length - messageIndexThreshold), messages.length - messageIndexThreshold + MAX_MESSAGES_TO_RENDER);
     }, [messages, messageIndexThreshold]);
     
@@ -88,7 +88,7 @@ function PoolMessagesViewComponent({ poolID, messages, userMap }: PoolMessagesVi
             if (!atBottomThreshold.current && messageIndexThreshold > MAX_MESSAGES_TO_RENDER) {
                 atBottomThreshold.current = true;
                 // GET EXTRA BOTTOM (if needed/from indexedDB)
-                console.log("GET EXTRA BOTTOM");
+                //console.log("GET EXTRA BOTTOM");
                 setMessageIndexThreshold(messageIndexThreshold - EXTRA_MESSAGES_TO_RENDER);
             } else {
                 if (e.currentTarget.scrollTop + e.currentTarget.offsetHeight + 10 >= e.currentTarget.scrollHeight) {
@@ -111,8 +111,8 @@ function PoolMessagesViewComponent({ poolID, messages, userMap }: PoolMessagesVi
                 // ONLY if there is extra top, or else don't (SOLUTION RIGHT NOW DOESN"T COUNT FOR THAT)
                 // NEGATIVE MESSAGEINDEXTHRESHOLD IS FINE, because there is a Math.max in the slice
                 // So the only thing to add if using stored messages, is to have an EXTRA condition if there is extra top
-                console.log(messages.length, messageIndexThreshold);
-                console.log("GET EXTRA TOP", messages.length - messageIndexThreshold, messages.length - (messageIndexThreshold + EXTRA_MESSAGES_TO_RENDER), messages.length - messageIndexThreshold + MAX_MESSAGES_TO_RENDER);
+                //console.log(messages.length, messageIndexThreshold);
+                //console.log("GET EXTRA TOP", messages.length - messageIndexThreshold, messages.length - (messageIndexThreshold + EXTRA_MESSAGES_TO_RENDER), messages.length - messageIndexThreshold + MAX_MESSAGES_TO_RENDER);
                 if (messages.length - messageIndexThreshold >= 0) {
                     setMessageIndexThreshold(messageIndexThreshold + EXTRA_MESSAGES_TO_RENDER);
                 }
@@ -142,11 +142,11 @@ function PoolMessagesViewComponent({ poolID, messages, userMap }: PoolMessagesVi
                     let messageContentElement: JSX.Element = <></>;
 
                     switch (msg.type) {
-                        case PoolMessageType.NODE_STATUS:
+                        case PoolMessageType.NODE_STATE:
                             let nodeState: PoolUpdateNodeState = msg.data;
                             messageContentElement =
                                 <div className="pool-message-node-status">
-                                    {nodeState.nodeID} {userMap.get(nodeState.userID)?.user.DisplayName} has {nodeState.state == PoolNodeState.ACTIVE ? "joined" : "left"}
+                                    {userMap.get(nodeState.userID)?.user.DisplayName || nodeState.userID} {"(" + nodeState.nodeID + ")"} has {nodeState.state == PoolNodeState.ACTIVE ? "joined" : "left"}
                                 </div>
                             break;
                         case PoolMessageType.TEXT:
@@ -204,7 +204,7 @@ function PoolMessagesViewComponent({ poolID, messages, userMap }: PoolMessagesVi
                             {
                                 (
                                     index == 0 || 
-                                    // msg.nodeID != pool.messages[index - 1].nodeID || should be deviceID
+                                    msg.userID != messages[index - 1].userID ||  // should be deviceID
                                     msg.created - messages[index - 1].created > CONSISTENT_MESSAGE_INTERVAL ||
                                     (messages[index - 1].type != PoolMessageType.TEXT && 
                                     messages[index - 1].type != PoolMessageType.FILE_OFFER && 
@@ -214,7 +214,7 @@ function PoolMessagesViewComponent({ poolID, messages, userMap }: PoolMessagesVi
                                 ? (
                                     <div className="pool-message-info-bar">
                                         <div className="pool-message-name">
-                                            {userMap.get(msg.userID)?.user.DisplayName}
+                                            {userMap.get(msg.userID)?.user.DisplayName || msg.userID}
                                         </div>
                                         <div className="pool-message-date">
                                             {formatDate(msg.created)}

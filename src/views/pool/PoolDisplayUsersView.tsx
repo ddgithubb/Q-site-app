@@ -50,10 +50,10 @@ function PoolDisplayUsersViewComponent({ poolID, users, userMap, hidden }: PoolD
                                 {userActiveDevices.activeDevices ? userActiveDevices.activeDevices.size + " Device" + (userActiveDevices.activeDevices.size > 1 ? "s" : "") + " Active" : " Offline"}
                             </div>
                         </div>
-                        <AnimatePresence>
+                        {/* <AnimatePresence> */}
                             {
                                 openAccordionUsersMap.get(user.UserID) && (
-                                    <motion.div initial={{ maxHeight: 0 }} animate={{ maxHeight: 400 }} exit={{ maxHeight: 0 }}>
+                                    // <motion.div initial={{ maxHeight: 0 }} animate={{ maxHeight: 400 }} exit={{ maxHeight: 0 }}>
                                         <div className="display-user-devices-container">
                                             {
                                                 user.Devices.slice().sort((a, b) => (userActiveDevices!.activeDevices!.has(a.DeviceID) ? 0 : 1) - (userActiveDevices!.activeDevices!.has(b.DeviceID) ? 0 : 1)).map((node) => (
@@ -80,10 +80,10 @@ function PoolDisplayUsersViewComponent({ poolID, users, userMap, hidden }: PoolD
                                                 ))
                                             }
                                         </div>
-                                    </motion.div>
+                                    // </motion.div>
                                 )
                             }
-                        </AnimatePresence>
+                        {/* </AnimatePresence> */}
                     </div>
                     // ACCORDION DEVICES + FILES
                 ) : null})

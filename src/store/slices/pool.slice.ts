@@ -25,6 +25,10 @@ export interface UpdateUserAction extends PoolAction {
     nodeInfo: PoolNodeInfo;
 }
 
+export interface RemoveUserAction extends PoolAction {
+    userID: string;
+}
+
 export interface AddMessageAction extends PoolAction {
     message: PoolMessage;
 }
@@ -160,17 +164,27 @@ const poolSlice = createSlice({
                 pool.Users.push(user);
             }
         },
+        removeUser(state: PoolsState, action: PayloadAction<RemoveUserAction>) {
+            let pool = getPool(state, action);
+            for (let i = 0; i < pool.Users.length; i++) {
+                if (pool.Users[i].UserID == action.payload.userID) {
+                    pool.Users.splice(i, 1);
+                    break;
+                }
+            }
+        },
         addMessage(state: PoolsState, action: PayloadAction<AddMessageAction>) {
             let pool = getPool(state, action);
             let msg: PoolMessage = action.payload.message;
-            //console.log("ADDING MESSAGE", msg, pool.messages[0]?.created)
+            //console.log("ADDING MESSAGE", msg, msg.created, pool.messages[0]?.created)
             if (pool.messages.length == 0) {
                 pool.messages.push(msg);
                 return;
             }
             for (let i = pool.messages.length; i >= 0; i--) {
+                //console.log(pool.messages[i - 1].created, msg.created >= pool.messages[i - 1].created);
                 if (i == 0 || msg.created >= pool.messages[i - 1].created) {
-                    pool.messages.splice(i + 1, 0, msg);
+                    pool.messages.splice(i, 0, msg);
                     break;
                 }
             }

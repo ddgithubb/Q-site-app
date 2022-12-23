@@ -1,7 +1,7 @@
 import { SSNodeStatusData, SSReportCodes, SSReportNodeData, SSSDPData, SSStatus, SSMessage, SSAddNodesData, SSRemoveNodeData } from "./sync-server.model";
 import { PoolNodeState, Pool, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageAction, PoolUpdateNodeState, PoolFileRequest, PoolMessageSourceInfo, PoolMessageDestinationInfo, MESSAGE_ID_LENGTH, FILE_ID_LENGTH, PoolMessageInfo, PoolChunkRange, PoolImageOffer, PoolDownloadProgressStatus, PoolRequestMediaHint, PoolMessage, PoolRemoveFileRequest, PoolRetractFileOffer, PoolFileInfo, PoolFileOffer, PoolFileOfferAndSeeders } from "./pool.model";
 import { getStoreState, store } from "../store/store";
-import { AddActiveNodeAction, AddDownloadAction, AddFileOfferAction, AddMessageAction, PoolAction, poolAction, RemoveActiveNodeAction, RemoveFileOfferAction, ResetPoolAction, UpdateDownloadProgressStatusAction, UpdateUserAction } from "../store/slices/pool.slice";
+import { AddActiveNodeAction, AddDownloadAction, AddFileOfferAction, AddMessageAction, PoolAction, poolAction, RemoveActiveNodeAction, RemoveFileOfferAction, RemoveUserAction, ResetPoolAction, UpdateDownloadProgressStatusAction, UpdateUserAction } from "../store/slices/pool.slice";
 import { CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR, CHUNK_SIZE, DEFAULT_RECV_MESSAGES_CACHE, MAXIMUM_GET_LATEST_MESSAGE_LENGTH } from "../config/caching";
 import { nanoid } from "nanoid";
 import { createBinaryMessage, parseBinaryMessage, setBinaryMessageDestVisited } from "./pool-binary-message";
@@ -13,6 +13,7 @@ import { mebibytesToBytes } from "../helpers/file-size";
 import EventEmitter from "events";
 import { Image } from 'image-js';
 import { checkFileExist } from "../helpers/file-exists";
+import { profileAction, ProfileState } from "../store/slices/profile.slice";
 
 const MAXIMUM_DC_BUFFER_SIZE = mebibytesToBytes(15);
 const PREVIEW_IMAGE_DIMENSION = 10;
@@ -341,21 +342,32 @@ export class PoolClient {
 
     addNodes(addNodesData: SSAddNodesData) {
         for (const node of addNodesData) {
-            // TEMP (although update user is needed, it should be done with another function)
             let myNode = node.NodeID == this.nodeID;
+            
+            // TEMP (although update user is needed, it should be done with another function)
             let updateUserAction: UpdateUserAction = {
                 key: this.poolKey,
                 nodeInfo: node.NodeInfo,
             };
             store.dispatch(poolAction.updateUser(updateUserAction));
+            if (myNode) {
+                store.dispatch(profileAction.initProfile({
+                    userID: node.NodeInfo.UserID,
+                    device: {
+                        DeviceID: node.NodeInfo.DeviceID,
+                        DeviceName: node.NodeInfo.DeviceName,
+                        DeviceType: node.NodeInfo.DeviceType,
+                    },
+                } as ProfileState))
+            }
             // TEMP
-
+            
             let poolNode: PoolNode = {
                 nodeID: node.NodeID,
                 userID: node.NodeInfo.UserID,
                 deviceID: node.NodeInfo.DeviceID,
                 fileOffers: [],
-            }
+            };
 
             if (myNode) {
                 let fileOffersData: FileOfferData[] = FileManager.getFileOffers(this.poolID) || [];
@@ -380,17 +392,19 @@ export class PoolClient {
                     nodeID: poolNode.nodeID,
                     userID: poolNode.userID,
                     state: PoolNodeState.ACTIVE,
-                }
-                let msg: PoolMessage = this.createMessage(PoolMessageType.NODE_STATUS, updateNodeState);
+                };
+                let msg: PoolMessage = this.createMessage(PoolMessageType.NODE_STATE, updateNodeState, this.createNodeStateMsgID(node.NodeID, node.Timestamp, PoolNodeState.ACTIVE));
                 msg.created = node.Timestamp;
-                this.addMessage(msg);
+                this.addAndCheckMessage(msg);
             }
         }
     }
 
     removeNode(removeNodeData: SSRemoveNodeData) {
         let nodeID: string = removeNodeData.NodeID;
+
         this.activeNodes.delete(nodeID);
+
         let existingNode: PoolNode | undefined = undefined;
         for (const node of this.getPool().activeNodes) {
             if (node.nodeID == nodeID) {
@@ -399,22 +413,33 @@ export class PoolClient {
             }
         }
         if (!existingNode) return;
+
+        // TEMP
+        store.dispatch(poolAction.removeUser({
+            key: this.poolKey,
+            userID: existingNode.userID, 
+        } as RemoveUserAction));
+        // TEMP
+
         for (let i = 0; i < existingNode.fileOffers.length; i++) {
             this.removeAvailableFileOffer(existingNode.fileOffers[i].fileID, nodeID);
             // FileManager.completeFileDownload(existingNode.fileOffers[i].fileID);
         }
+
         store.dispatch(poolAction.removeActiveNode({
             key: this.poolKey,
             nodeID: nodeID,
         } as RemoveActiveNodeAction));
+
         let updateNodeState: PoolUpdateNodeState = {
             nodeID: nodeID,
             userID: existingNode.userID,
             state: PoolNodeState.INACTIVE,
-        }
-        let msg: PoolMessage = this.createMessage(PoolMessageType.NODE_STATUS, updateNodeState);
+        };
+
+        let msg: PoolMessage = this.createMessage(PoolMessageType.NODE_STATE, updateNodeState, this.createNodeStateMsgID(nodeID, removeNodeData.Timestamp, PoolNodeState.INACTIVE));
         msg.created = removeNodeData.Timestamp;
-        this.addMessage(msg);
+        this.addAndCheckMessage(msg);
         
         for (const promotedNode of removeNodeData.PromotedNodes) {
             this.activeNodes.set(promotedNode.NodeID, promotedNode.Path);
@@ -1327,7 +1352,7 @@ export class PoolClient {
             }
         }
         
-        let data = JSON.stringify(msg);
+        let data = JSON.stringify(messagePackage);
         this.broadcastMessage(data, src, dests, fromNodeID, partnerIntPath);
     }
 
@@ -1616,23 +1641,15 @@ export class PoolClient {
 
                 if (matches == 0) {
                     if (this.nodePosition.CenterCluster) {
-                        //if (this.sendToParentClusterPanel(dests[destIndex].lastSeenPath[0], data, partnerIntPath)) sent = true;
-                        //parentClusterDirection[dests[destIndex].lastSeenPath[0]].push(dests[destIndex]);
                         this.panelSwitches[0][dests[destIndex].lastSeenPath[0]] = true;    
                     } else {
-                        //if (this.sendToParentClusterPanel(2, data, partnerIntPath)) sent = true;
-                        //parentClusterDirection[2].push(dests[destIndex]);
                         this.panelSwitches[0][2] = true;   
                     }
                 } else {
                     if (matches != 1 && matches <= srcDestMatches) {
-                        //if (this.sendToParentClusterPanel(2, data, partnerIntPath)) sent = true;
-                        //parentClusterDirection[2].push(dests[destIndex]);
                         this.panelSwitches[0][2] = true;   
                     }
                     if (matches != dests[destIndex].lastSeenPath.length && matches >= srcDestMatches) {
-                        //if (this.sendToChildClusterPanel(dests[destIndex].lastSeenPath[matches], data, partnerIntPath)) sent = true;
-                        //childClusterDirection[dests[destIndex].lastSeenPath[matches]].push(dests[destIndex]);
                         this.panelSwitches[1][dests[destIndex].lastSeenPath[matches]] = true;   
                     }
                 }
@@ -1997,11 +2014,17 @@ export class PoolClient {
         //     data: message.data,
         //     received: Date.now(),
         // };
-        message.received = Date.now(),
+        message.received = Date.now();
         store.dispatch(poolAction.addMessage({
             key: this.poolKey,
             message: message,
         } as AddMessageAction));
+    }
+
+    private addAndCheckMessage(msg: PoolMessage) {
+        if (!this.checkMessageDuplicate(msg)) {
+            this.addMessage(msg);
+        }
     }
 
     private addMessages(messages: PoolMessage[]) {
@@ -2011,6 +2034,7 @@ export class PoolClient {
                 if (!isPersistent) {
                     this.addMessage(message);
                 }
+
                 // if (messages[i].type == PoolMessageType.NODE_STATUS) {
                 //     if (messages[i].data.state == PoolNodeState.ACTIVE) {
                 //         this.addActiveNodeMessage(messages[i]);
@@ -2022,6 +2046,10 @@ export class PoolClient {
                 // }
             }
         }
+    }
+
+    private createNodeStateMsgID(nodeID: string, timestamp: number, state: PoolNodeState): string {
+        return nodeID + timestamp + state.toString();
     }
 
     private checkAtMyDest(dests: PoolMessageDestinationInfo[]): boolean {
@@ -2056,13 +2084,13 @@ export class PoolClient {
         return dests
     }
 
-    private createMessage(type: PoolMessageType, data?: any) {
+    private createMessage(type: PoolMessageType, data?: any, msgID: string = nanoid(MESSAGE_ID_LENGTH)) {
         let msg: PoolMessage = {
-            msgID: nanoid(MESSAGE_ID_LENGTH),
-            type: type,
+            msgID,
+            type,
             created: Date.now(),
             userID: getStoreState().profile.userID,
-            data: data,
+            data,
         }
         return msg;
     }
@@ -2071,10 +2099,10 @@ export class PoolClient {
         let src = this.getSrc();
         let dests = destNodeIDs ? this.getDests(destNodeIDs) : undefined;
         let messagePackage: PoolMessagePackage = {
-            src: src,
-            dests: dests,
-            action: action,
-            partnerIntPath: partnerIntPath,
+            src,
+            dests,
+            action,
+            partnerIntPath,
             msg: this.createMessage(type, data),
         }
         return messagePackage;
