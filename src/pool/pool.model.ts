@@ -71,7 +71,6 @@ export interface PoolMessageSourceInfo {
 
 export interface PoolMessageDestinationInfo {
     nodeID: string;
-    lastSeenPath: number[];
     visited: boolean;
 }
 

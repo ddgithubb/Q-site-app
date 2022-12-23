@@ -4,13 +4,25 @@ import { FILE_ID_LENGTH, MESSAGE_ID_LENGTH, NODE_ID_LENGTH, PoolMessageDestinati
 var textEncoder = new TextEncoder();
 var textDecoder = new TextDecoder();
 
-export type ParsedBinaryMessage = [ArrayBuffer, string, number, PoolMessageSourceInfo, PoolMessageDestinationInfo[] | undefined];
+const BOOLEAN_LENGTH = 1;
+const INDICATOR_LENGTH = 1;
+const FILE_SIZE_BUFFER_LENGTH = 4;
+
+//export type ParsedBinaryMessage = [ArrayBuffer, string, number, PoolMessageSourceInfo, PoolMessageDestinationInfo[] | undefined];
+
+export interface ParsedBinaryMessage {
+    payload: ArrayBuffer;
+    fileID: string;
+    chunkNumber: number;
+    src: PoolMessageSourceInfo;
+    dests: PoolMessageDestinationInfo[] | undefined;
+}
 
 export function createBinaryMessage(payload: ArrayBuffer, fileID: string, chunkNumber: number, src: PoolMessageSourceInfo, dests?: PoolMessageDestinationInfo[]): Uint8Array {
-    let length = NODE_ID_LENGTH + src.path.length + 1 + FILE_ID_LENGTH + 4 + payload.byteLength;
+    let length = NODE_ID_LENGTH + src.path.length + INDICATOR_LENGTH + FILE_ID_LENGTH + FILE_SIZE_BUFFER_LENGTH + payload.byteLength;
     if (dests) {
         for (let i = 0; i < dests.length; i++) {
-            length += (NODE_ID_LENGTH + 1 + dests[i].lastSeenPath.length + 1);
+            length += (NODE_ID_LENGTH + BOOLEAN_LENGTH + INDICATOR_LENGTH);
         }
     }
     let data = new Uint8Array(length);
@@ -21,18 +33,16 @@ export function createBinaryMessage(payload: ArrayBuffer, fileID: string, chunkN
     data.set(src.path, offset)
     offset += src.path.length;
     data.set([dests ? 254 : 255], offset);
-    offset += 1;
+    offset += INDICATOR_LENGTH;
 
     if (dests) {
         for (let i = 0; i < dests.length; i++) {
             data.set(textEncoder.encode(dests[i].nodeID), offset);
             offset += NODE_ID_LENGTH;
             data.set([dests[i].visited ? 1 : 0], offset);
-            offset += 1;
-            data.set(dests[i].lastSeenPath, offset);
-            offset += dests[i].lastSeenPath.length;
+            offset += BOOLEAN_LENGTH;
             data.set([i != dests.length - 1 ? 254 : 255], offset);
-            offset += 1;
+            offset += INDICATOR_LENGTH;
         }
     }
 
@@ -40,11 +50,11 @@ export function createBinaryMessage(payload: ArrayBuffer, fileID: string, chunkN
     // offset += MESSAGE_ID_LENGTH
     data.set(textEncoder.encode(fileID), offset);
     offset += FILE_ID_LENGTH;
-    let chunkNumberBuffer = new ArrayBuffer(4);
+    let chunkNumberBuffer = new ArrayBuffer(FILE_SIZE_BUFFER_LENGTH);
     let chunkNumberDataView = new DataView(chunkNumberBuffer);
     chunkNumberDataView.setUint32(0, chunkNumber, false);
     data.set(new Uint8Array(chunkNumberBuffer), offset);
-    offset += 4;
+    offset += FILE_SIZE_BUFFER_LENGTH;
     
     data.set(new Uint8Array(payload), offset);
     return data;
@@ -82,35 +92,19 @@ export function parseBinaryMessage(data: Uint8Array): ParsedBinaryMessage | unde
         while (true) {
             let dest: PoolMessageDestinationInfo = {
                 nodeID: "",
-                lastSeenPath: [],
                 visited: false,
             }
             dest.nodeID = textDecoder.decode(data.subarray(offset, offset += NODE_ID_LENGTH));
             if (dest.nodeID.length != NODE_ID_LENGTH) return undefined;
             // console.log("PARSING BINARY PASS", dest.nodeID);
             dest.visited = (data.at(offset++) || 0) == 1;
-            let last = false;
-            while (true) {
-                let p = data.at(offset++);
-                if (p == undefined) return undefined;
-                // console.log("PARSING BINARY p", p);
-                if (p == 254) {
-                    break;
-                } else if (p == 255) {
-                    last = true;
-                    break;
-                }
-                if (p != 0 && p != 1 && p != 2) return undefined;
-                // console.log("PARSING BINARY p1", p);
-                dest.lastSeenPath.push(p);
+            let p = data.at(offset++);
+            if (p == 254) {
+                continue;
+            } else if (p == 255) {
+                break;
             }
-            // console.log("PARSING BINARY DEST", dest);
-            if (dest.lastSeenPath.length == 0 && src.nodeID != dest.nodeID) return undefined;
-            // console.log("PARSING BINARY DEST1", dest);
-            dests.push(dest);
-            if (last) break;
         }
-        // console.log("PARSING BINARY DESTS BREAK", dests);
     }
 
     // msgID = textDecoder.decode(data.subarray(offset, offset += MESSAGE_ID_LENGTH));
@@ -124,19 +118,25 @@ export function parseBinaryMessage(data: Uint8Array): ParsedBinaryMessage | unde
 
     payload = data.subarray(offset)
     if (payload.length == 0) return undefined;
-    return [payload.buffer.slice(payload.byteOffset), fileID, chunkNumber, src, dests];
+    return {
+        payload: payload.buffer.slice(payload.byteOffset),
+        fileID,
+        chunkNumber,
+        src,
+        dests
+    };
 }
 
 export function setBinaryMessageDestVisited(data: Uint8Array, parsedMsg: ParsedBinaryMessage, targetDestNodeID: string) {
-    let offset = NODE_ID_LENGTH + parsedMsg[3].path.length + 1;
-    if (!parsedMsg[4]) return;
-    for (let i = 0; i < parsedMsg[4].length; i++) {
-        if (parsedMsg[4][i].nodeID == targetDestNodeID) {
+    let offset = NODE_ID_LENGTH + parsedMsg.src.path.length + INDICATOR_LENGTH;
+    if (!parsedMsg.dests) return;
+    for (let i = 0; i < parsedMsg.dests.length; i++) {
+        if (parsedMsg.dests[i].nodeID == targetDestNodeID) {
             offset += NODE_ID_LENGTH;
             data.set([1], offset);
-            parsedMsg[4][i].visited = true;
+            parsedMsg.dests[i].visited = true;
             return;
         }
-        offset += NODE_ID_LENGTH + 1 + parsedMsg[4][i].lastSeenPath.length + 1;
+        offset += NODE_ID_LENGTH + BOOLEAN_LENGTH + INDICATOR_LENGTH;
     }
 }
