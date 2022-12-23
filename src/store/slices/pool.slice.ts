@@ -241,6 +241,12 @@ const poolSlice = createSlice({
                 }
             }
         },
+        clearFileOffers(state: PoolsState, action: PayloadAction<PoolAction>) {
+            let pool = getPool(state, action);
+            for (const node of pool.activeNodes) {
+                node.fileOffers = [];
+            }
+        },
         addDownload(state: PoolsState, action: PayloadAction<AddDownloadAction>) {
             let pool = getPool(state, action);
             // for (let i = 0; i < pool.downloadQueue.length; i++) {

@@ -98,6 +98,7 @@ export function parseBinaryMessage(data: Uint8Array): ParsedBinaryMessage | unde
             if (dest.nodeID.length != NODE_ID_LENGTH) return undefined;
             // console.log("PARSING BINARY PASS", dest.nodeID);
             dest.visited = (data.at(offset++) || 0) == 1;
+            dests.push(dest);
             let p = data.at(offset++);
             if (p == 254) {
                 continue;

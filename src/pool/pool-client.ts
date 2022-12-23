@@ -58,6 +58,13 @@ interface AvailableFile {
     retryCount: number;
 }
 
+enum MessageDirection {
+    PARENT,
+    CHILD,
+    BOTH,
+    NONE,
+}
+
 export class PoolClient {
     poolID: string;
     poolKey: number;
@@ -1109,7 +1116,7 @@ export class PoolClient {
 
     addAvailableFileOffer(fileOffer: PoolFileOffer) {
         let availableFile = this.availableFiles.get(fileOffer.fileID);
-        console.log("ADDING AVAILABLE FILE");
+        console.log("ADDING AVAILABLE FILE", fileOffer.fileID);
         if (!availableFile) {
             availableFile = {
                 fileOfferAndSeeders: {
@@ -1124,7 +1131,9 @@ export class PoolClient {
                 retryCount: 0,
             };
             this.availableFiles.set(fileOffer.fileID, availableFile);
+            //console.log("SETTING AVAILABLE FILE", this.availableFiles.size);
         } else if (fileOffer.totalSize != availableFile.fileOfferAndSeeders.totalSize) return;
+        //console.log(availableFile.fileOfferAndSeeders.seederNodeIDs.length, availableFile.fileOfferAndSeeders.seederNodeIDs.includes(fileOffer.seederNodeID), fileOffer.seederNodeID)
         if (!availableFile.fileOfferAndSeeders.seederNodeIDs.includes(fileOffer.seederNodeID)) {
             availableFile.fileOfferAndSeeders.seederNodeIDs.push(fileOffer.seederNodeID);
             store.dispatch(poolAction.addFileOffer({
@@ -1170,6 +1179,7 @@ export class PoolClient {
     updateLatest(updateLatestInfo: PoolUpdateLatestInfo) {
         this.addMessages(updateLatestInfo.messages);
         if (!updateLatestInfo.messagesOnly) {
+            store.dispatch(poolAction.clearFileOffers({ key: this.poolKey } as PoolAction));
             this.availableFiles.clear();
             for (const fileOfferAndSeeders of updateLatestInfo.fileOffersAndSeeders) {
                 for (const seederNodeID of fileOfferAndSeeders.seederNodeIDs) {
@@ -1447,7 +1457,7 @@ export class PoolClient {
         // 1 Child node to Center Cluster
 
         // console.log("BINARY MSG RECV:", payload.byteLength, msgID, fileID, chunkNumber, dests);
-        // console.log("FORWARD CHUNKNUMBER", chunkNumber)
+        // console.log("FORWARD CHUNKNUMBER", parsedMsg.chunkNumber, parsedMsg.dests);
 
         //let isADest = false;
         let partnerIntPath = getCacheChunkNumberFromChunkNumber(parsedMsg.chunkNumber) % 3;
@@ -1586,8 +1596,9 @@ export class PoolClient {
 
             if (restrictToOwnPanel) return;
 
-            let [sendToParent, sendToChild] = this.getDirectionOfMessage(srcPath);
-            if (sendToParent) {
+            let direction = this.getDirectionOfMessage(srcPath);
+
+            if (direction == MessageDirection.PARENT || direction == MessageDirection.BOTH) {
                 // for (let i = 0; i < parentClusterDirection.length; i++) {
                 //     if (i != panelNumber && parentClusterDirection[i].length != 0) {
                 //         if (this.sendToParentClusterPanel(i, data, partnerIntPath)) sent = true;
@@ -1600,7 +1611,7 @@ export class PoolClient {
                 }
             }
 
-            if (sendToChild) {  
+            if (direction == MessageDirection.CHILD || direction == MessageDirection.BOTH) {  
                 // for (let i = 0; i < childClusterDirection.length; i++) {
                 //     if (childClusterDirection[i].length != 0) {
                 //         if (this.sendToChildClusterPanel(i, data, partnerIntPath)) sent = true;
@@ -1635,11 +1646,11 @@ export class PoolClient {
 
             if (restrictToOwnPanel) return;
 
-            let [sendToParent, sendToChild] = this.getDirectionOfMessage(srcPath);
+            let direction = this.getDirectionOfMessage(srcPath);
  
             //console.log(sendToParent, sendToChild);
 
-            if (sendToParent) {
+            if (direction == MessageDirection.PARENT || direction == MessageDirection.BOTH) {
                 for (let i = 0; i < 3; i++) {
                     if (i != panelNumber) {
                         if (this.sendToParentClusterPanel(i, data, partnerIntPath)) sent = true;
@@ -1647,7 +1658,7 @@ export class PoolClient {
                 }
             }
 
-            if (sendToChild) {
+            if (direction == MessageDirection.CHILD || direction == MessageDirection.BOTH) {
                 for (let i = 0; i < 2; i++) {
                     if (this.sendToChildClusterPanel(i, data, partnerIntPath)) sent = true;
                 }
@@ -1655,7 +1666,7 @@ export class PoolClient {
         }
     }
     
-    private getDirectionOfMessage(srcPath: number[]): [boolean, boolean] {
+    private getDirectionOfMessage(srcPath: number[]): MessageDirection {
         let sendToParent = false;
         let sendToChild = true;
         if (this.nodePosition.Path.length < srcPath.length) {
@@ -1673,7 +1684,14 @@ export class PoolClient {
             sendToParent = true;
             sendToChild = true;
         }
-        return [sendToParent, sendToChild];
+        if (sendToParent && sendToChild) {
+            return MessageDirection.BOTH;
+        } else if (sendToParent) {
+            return MessageDirection.PARENT
+        } else if (sendToChild) {
+            return MessageDirection.CHILD;
+        }
+        return MessageDirection.NONE;
     }
 
     private setDataChannelFunctions(nodeConnection: NodeConnection, targetNodeID: string, sentOffer: boolean) {
