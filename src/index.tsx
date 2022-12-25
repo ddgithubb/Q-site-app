@@ -6,6 +6,7 @@ import reportWebVitals from './reportWebVitals';
 import { store } from './store/store';
 import { Provider } from 'react-redux';
 import { isMobile } from 'react-device-detect';
+import { PRODUCTION } from './config/env';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -39,4 +40,10 @@ let rootEl = document.getElementById('root');
 if (rootEl) {
   rootEl.style.height = isMobile ? "calc(var(--vh, 1vh) * 100)" : "100vh";
   rootEl.style.width = "100vw";
+}
+
+if (PRODUCTION) {
+  console.log = () => {}
+  console.error = () => {}
+  console.debug = () => {}
 }

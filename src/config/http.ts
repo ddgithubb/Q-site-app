@@ -1,8 +1,10 @@
 import * as FD from "form-data";
+import { PRODUCTION } from "./env";
 
-const SYNC_SERVER_DOMAIN: string = "192.168.1.140:8001";
+const SYNC_SERVER_TEST_DOMAIN: string = "192.168.1.140:80";
+const SYNC_SERVER_PROD_DOMAIN: string = "ec2-99-79-191-205.ca-central-1.compute.amazonaws.com";
 const SYNC_SERVER_VERSION: string = "v1";
-const SYNC_SERVER_HOST: string = "ws://" + SYNC_SERVER_DOMAIN + "/ss/" + SYNC_SERVER_VERSION + "/connect";
+const SYNC_SERVER_HOST: string = "ws://" + (PRODUCTION ? SYNC_SERVER_PROD_DOMAIN : SYNC_SERVER_TEST_DOMAIN) + "/ss/" + SYNC_SERVER_VERSION + "/connect";
 
 const API_DOMAIN: string = "localhost" + ":8000";
 const API_VERSION: string = "v1";
