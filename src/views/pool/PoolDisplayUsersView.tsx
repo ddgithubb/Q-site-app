@@ -42,10 +42,10 @@ function PoolDisplayUsersViewComponent({ poolID, users, userMap, hidden }: PoolD
                     return userActiveDevices ? (
                     // MAKE THE HEADER ACCORDION (with icon, only allow one accordion by just recording which current accordion)
                     <div className="display-user-accordion-container" key={user.UserID}>
-                        <div className="display-user-header" onClick={() => toggleAccordion(user.UserID)}>
+                        <div className="display-user-header elipsify-container" onClick={() => toggleAccordion(user.UserID)}>
                             <img className="display-user-accordion-arrow" src={AccordionArrowIcon} aria-expanded={openAccordionUsersMap.get(user.UserID)} />
-                            <div className="display-user-display-name">{user.DisplayName}</div>
-                            <div className="display-user-info-point">
+                            <div className="display-user-display-name elipsify-content">{user.DisplayName}</div>
+                            <div className="display-user-info-point elipsify-extra">
                                 <IndicatorDot type={userActiveDevices.activeDevices ? "online" : "offline"} size="small" />
                                 {userActiveDevices.activeDevices ? userActiveDevices.activeDevices.size + " Device" + (userActiveDevices.activeDevices.size > 1 ? "s" : "") + " Active" : " Offline"}
                             </div>

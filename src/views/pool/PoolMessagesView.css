@@ -46,6 +46,7 @@
     position: absolute;
     right: 15px;
     display: none;
+    z-index: 1;
 }
 
 .pool-message-container:hover .pool-message-portable-date {
@@ -71,16 +72,12 @@
     gap: 20px;
     padding: 15px 20px;
     border-radius: 5px;
-    min-width: 0px;
 }
 
 .pool-message-file-name {
     flex: 1;
     font-size: 15px;
     min-width: 10px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     cursor: pointer;
 }
 
@@ -90,7 +87,6 @@
 
 .pool-message-file-size {
     font-size: 14px;
-    white-space: nowrap;
     color: var(--light-color-secondary);
 }
 
@@ -180,4 +176,8 @@
 
 .pool-end-spacer {
     margin-top: 20px;
+}
+
+.pool-header-spacer {
+    margin-top: 10px;
 }

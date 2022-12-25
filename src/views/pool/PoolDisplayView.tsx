@@ -1,24 +1,26 @@
 
 import { motion } from 'framer-motion'
-import { useState, useRef, memo, MouseEventHandler } from 'react'
+import { useState, useRef, memo, MouseEventHandler, useEffect, useCallback } from 'react'
 import { CircularProgressbar } from 'react-circular-progressbar'
 import { fileSizeToString } from '../../helpers/file-size'
 import { FileManager, PoolManager } from '../../pool/global'
-import { Pool, PoolConnectionState, PoolDownloadProgressStatus, PoolFileInfo, PoolUser } from '../../pool/pool.model'
+import { Pool, PoolConnectionState, PoolDownloadProgressStatus, PoolFileInfo, PoolFileOffer, PoolUser } from '../../pool/pool.model'
 import { IndicatorDot } from '../components/IndicatorDot'
 import { PoolDisplayUsersView } from './PoolDisplayUsersView'
-import { PoolMessageMode, PoolUserActiveDevices } from './PoolView'
+import { PoolMessageMode, PoolUserActiveDevices, UserMapType } from './PoolView'
+import { isMobile } from 'react-device-detect';
 
 import './PoolDisplayView.css'
 import AddIcon from '../../assets/add.png';
 import AddImageIcon from '../../assets/add-image.png';
 import FileIcon from '../../assets/file.png';
-import CancelIcon from '../../assets/cancel.png';
+import CancelIcon from '../../assets/trash.png';
+import SendIcon from '../../assets/send.png';
 
 export interface PoolDisplayViewParams {
     pool: Pool;
     messageMode: PoolMessageMode;
-    userMap: Map<string, PoolUserActiveDevices>;
+    userMap: UserMapType;
 }
 
 export const PoolDisplayView = memo(PoolDisplayViewComponent); 
@@ -77,6 +79,10 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
     }
 
     const textAreaKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+        // if (textAreaElement) {
+        //     if (e.key != 'Enter') textAreaElement.innerHTML = e.key;
+        // }
+        if (isMobile) return;
         if (e.key == 'Enter') {
             enterKeyDown.current = true;
             if (!shiftKeyDown.current) {
@@ -110,36 +116,7 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
     return (
         <div className="display-container">
             <div className="display-overlay-container">
-                <div className="display-downloading-files-container">
-                    {
-                        pool.downloadQueue.map((fileProgress) => (
-                            <div 
-                                className="display-cancel-button-container display-downloading-file-container" 
-                                onClick={() => PoolManager.sendRemoveFileRequest(pool.PoolID, fileProgress.fileOffer)}
-                                key={fileProgress.fileOffer.fileID}>
-                                <div className="display-downloading-file display-cancel-button-child">
-                                    <div className="display-downloading-file-progress">
-                                        <CircularProgressbar 
-                                            value={fileProgress.progress} 
-                                            strokeWidth={15} 
-                                            styles={{
-                                                path: {
-                                                    stroke: `rgb(${getRGBFromDownloadProgressStatus(fileProgress.status)})`,
-                                                },
-                                                trail: {
-                                                    stroke: `rgba(${getRGBFromDownloadProgressStatus(fileProgress.status)}, 0.1)`
-                                                }
-                                            }} />
-                                    </div>
-                                    <div className="display-downloading-file-name">
-                                        {fileProgress.fileOffer.fileName}
-                                    </div>
-                                </div>
-                                <img className="display-cancel-button-icon" src={CancelIcon}/>
-                            </div>
-                        ))
-                    }
-                </div>
+                <DownloadQueue poolID={pool.PoolID} downloadQueue={pool.downloadQueue} />
             </div>
             <div className="display-info-bar">
                 <div className="display-info-bar-pool-name">
@@ -183,6 +160,9 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                 />
                 <div className="display-message-input-icons">
                     <img className="display-message-input-icon" src={AddImageIcon} onClick={addImage} />
+                    {
+                        isMobile ? <img className="display-message-input-icon display-message-send-icon" src={SendIcon} onTouchEnd={(e) => { sendTextMessage(); e.preventDefault() }}/> : null
+                    }
                 </div>
             </div>
             <div className="display-toggle-hide display-component-container display-files-container" aria-hidden={messageMode != PoolMessageMode.FILE}>
@@ -194,10 +174,10 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                 {
                     FileManager.getFileOffers(pool.PoolID)?.map((poolFileInfo) => (
                         <div className="display-cancel-button-container" key={poolFileInfo.fileID} onClick={() => sendRetractFileOffer(poolFileInfo.fileID)}>
-                            <div className="display-file-container display-cancel-button-child">
+                            <div className="display-file-container display-cancel-button-child elipsify-container">
                                 <img src={FileIcon} height={22} width={22} />
-                                <span className="display-file-name">{poolFileInfo.fileName}</span>
-                                <span className="display-file-size">{fileSizeToString(poolFileInfo.totalSize)}</span>
+                                <span className="display-file-name elipsify-content">{poolFileInfo.fileName}</span>
+                                <span className="display-file-size elipsify-extra">{fileSizeToString(poolFileInfo.totalSize)}</span>
                             </div>
                             <img className="display-cancel-button-icon" src={CancelIcon}/>
                         </div>
@@ -207,6 +187,59 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
             <PoolDisplayUsersView poolID={pool.PoolID || ""} users={pool.Users || []} userMap={userMap} hidden={messageMode != PoolMessageMode.USERS}/>
             <input className="hideInput" id="display-file-input" type="file" onChange={sendFileOffer} />
             <input className="hideInput" id="display-image-input" type="file" accept=".png,.jpg" onChange={sendImageOffer} />
+        </div>
+    )
+}
+
+function DownloadQueue({ poolID, downloadQueue }: { poolID: string, downloadQueue: PoolFileOffer[] } ) {
+
+    const refreshTimer = useRef<NodeJS.Timer | undefined>(undefined);
+    const [lastUpdate, setLastUpdate] = useState<number>(0);
+
+    useEffect(() => {
+        if (downloadQueue.length != 0) {
+            if (refreshTimer.current == undefined) {
+                refreshTimer.current = setInterval(() => {
+                    //console.log("DQ FORCE UPDATE");
+                    setLastUpdate(Date.now());
+                }, 100);
+            }
+        } else {
+            clearInterval(refreshTimer.current);
+            refreshTimer.current = undefined;
+        }
+    }, [downloadQueue]);
+
+    return (
+        <div className="display-downloading-files-container">
+            {
+                downloadQueue.map((fileOffer) => (
+                    <div 
+                        className="display-cancel-button-container display-downloading-file-container" 
+                        onClick={() => PoolManager.sendRemoveFileRequest(poolID, fileOffer)}
+                        key={fileOffer.fileID}>
+                        <div className="display-downloading-file display-cancel-button-child">
+                            <div className="display-downloading-file-progress">
+                                <CircularProgressbar 
+                                    value={FileManager.getFileDownloadProgress(fileOffer.fileID)} 
+                                    strokeWidth={15} 
+                                    styles={{
+                                        path: {
+                                            stroke: `rgb(${getRGBFromDownloadProgressStatus(FileManager.getFileDownloadStatus(fileOffer.fileID))})`,
+                                        },
+                                        trail: {
+                                            stroke: `rgba(${getRGBFromDownloadProgressStatus(FileManager.getFileDownloadStatus(fileOffer.fileID))}, 0.1)`
+                                        }
+                                    }} />
+                            </div>
+                            <div className="display-downloading-file-name">
+                                {fileOffer.fileName}
+                            </div>
+                        </div>
+                        <img className="display-cancel-button-icon" src={CancelIcon}/>
+                    </div>
+                ))
+            }
         </div>
     )
 }

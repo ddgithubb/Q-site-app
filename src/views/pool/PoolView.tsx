@@ -2,17 +2,18 @@ import React, { createRef, LegacyRef, memo, useEffect, useMemo, useRef, useState
 import { useSelector } from 'react-redux';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { PoolClient } from '../../pool/pool-client';
-import { PoolConnectionState, PoolDevice, PoolFileInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolNodeState, PoolUser } from '../../pool/pool.model';
-import { getStoreState, GlobalState } from '../../store/store';
+import { PoolConnectionState, PoolDevice, PoolFileInfo, PoolInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolNodeState, PoolUser } from '../../pool/pool.model';
+import { getStoreState, GlobalState, store } from '../../store/store';
 import sanitizeHtml from 'sanitize-html';
 import { HTMLMotionProps, motion, MotionProps } from 'framer-motion';
-import { fileSizeToString } from '../../helpers/file-size';
+import { fileSizeToString, mebibytesToBytes } from '../../helpers/file-size';
 import { FileManager, PoolManager } from '../../pool/global';
 import { CircularProgressbar } from 'react-circular-progressbar';
 import { FILE_PICKER_OPTS } from '../../config/file-picker';
 import { formatDate, minutesToMillisecond } from '../../helpers/time';
 import { IndicatorDot } from '../components/IndicatorDot';
 import { PoolMessagesView } from './PoolMessagesView';
+import { isMobile } from 'react-device-detect';
 
 import './PoolView.css';
 import TextMessageIcon from '../../assets/text-message.png';
@@ -22,6 +23,8 @@ import SettingsIcon from '../../assets/settings.png';
 import DisconnectedIcon from '../../assets/disconnected.png';
 import DisconnectIcon from '../../assets/disconnect.png';
 import { PoolDisplayView } from './PoolDisplayView';
+import { poolAction } from '../../store/slices/pool.slice';
+import { profileAction } from '../../store/slices/profile.slice';
 
 export enum PoolMessageMode {
     DISCONNECT,
@@ -40,17 +43,41 @@ interface ActionBarButtonProps {
     setMessageMode: React.Dispatch<React.SetStateAction<PoolMessageMode>>;
 }
 
+export type UserMapType = Map<string, PoolUserActiveDevices>;
+
 export function PoolContainerView() {
     const navigate = useNavigate();
     const { poolID } = useParams();
+    const [ searchParams ] = useSearchParams();
     const [ poolKey, setPoolKey ] = useState<number>(0);
 
     useEffect(() => {
-        let pools = getStoreState().pool.pools;
         if (!poolID) {
             navigate('/pool');
             return;
         }
+
+        // TEMP 
+        let displayName = searchParams.get("displayName");
+        if (displayName == null) {
+            navigate('/join-pool?poolid=' + poolID);
+            return;
+        }
+        store.dispatch(profileAction.setDisplayName(displayName));
+        store.dispatch(poolAction.initPools([
+        {
+            PoolID: poolID,
+            PoolName: poolID,
+            Users: [],
+            Key: 0,
+            Settings: {
+                maxTextLength: 5000,
+                maxMediaSize: mebibytesToBytes(32),
+            }
+        } as PoolInfo]));
+        // TEMP
+
+        let pools = getStoreState().pool.pools;
         for (const pool of pools) {
             if (pool.PoolID == poolID) {
                 setPoolKey(pool.key);
@@ -58,6 +85,8 @@ export function PoolContainerView() {
                 return;
             }
         }
+
+        console.log("Going to pool");
         navigate('/pool');
     }, [])
 
@@ -77,7 +106,7 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
 
     const [ messageMode, setMessageMode ] = useState<PoolMessageMode>(PoolMessageMode.TEXT);
     const pool = useSelector((state: GlobalState) => state.pool.pools.at(poolKey));
-    const userMap = useMemo(() => {
+    const userMap = useMemo<UserMapType>(() => {
         if (!pool) return new Map<string, PoolUserActiveDevices>;
         let userMap = new Map<string, PoolUserActiveDevices>;
         for (const user of pool.Users) {
@@ -102,25 +131,13 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
     return (
         <div className="pool-view">
             {/* TODO: add fixed siaply of pool name along with # of active devices, # of active users, and # of users in general */}
-            <PoolMessagesView poolID={poolID} messages={pool?.messages || []} userMap={userMap} />
+            <PoolMessagesView poolID={poolID} messages={pool?.messages || []} userMap={userMap} downloadQueue={pool?.downloadQueue || []} />
             {
                 pool ? (
                     <PoolDisplayView pool={pool} messageMode={messageMode} userMap={userMap} />
                 ) : null
             }
-            <motion.div 
-                className="action-bar" 
-                initial={{ x: 150 }}
-                animate={{ x: pool?.connectionState == PoolConnectionState.CONNECTED ? 0 : 150 }} 
-                transition={{ type: "spring", duration: 0.5 }}
-            >
-                <ActionBarButton buttonType='danger' mode={PoolMessageMode.DISCONNECT} icon={DisconnectIcon} messageMode={messageMode} setMessageMode={setMessageMode} />
-                <ActionBarButton buttonType='utility' mode={PoolMessageMode.SETTINGS} icon={SettingsIcon} messageMode={messageMode} setMessageMode={setMessageMode} />
-                <ActionBarButton buttonType='utility' mode={PoolMessageMode.USERS} icon={UserGroupIcon} messageMode={messageMode} setMessageMode={setMessageMode}/>
-                <div className="action-bar-button-spacer"/>
-                <ActionBarButton buttonType='feature' mode={PoolMessageMode.FILE} icon={FileIcon} messageMode={messageMode} setMessageMode={setMessageMode}/>
-                <ActionBarButton buttonType='feature' mode={PoolMessageMode.TEXT} icon={TextMessageIcon} messageMode={messageMode} setMessageMode={setMessageMode}/>
-            </motion.div>
+            <ActionBar connectionState={pool?.connectionState || PoolConnectionState.CLOSED } messageMode={messageMode} setMessageMode={setMessageMode} />
             <motion.div className="pool-status-container" initial={{ y: -100 }} animate={{ y: (pool?.connectionState == PoolConnectionState.RECONNECTING ? 20 : -100) }}> 
                 <div className="pool-status pool-status-disconnected">
                     <img className="pool-status-img" src={DisconnectedIcon} />
@@ -131,9 +148,58 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
     )
 }
 
+const ActionBar = memo(ActionBarComponent);
+
+function ActionBarComponent({ connectionState, messageMode, setMessageMode }: { connectionState: PoolConnectionState, messageMode: PoolMessageMode, setMessageMode: React.Dispatch<React.SetStateAction<PoolMessageMode>> }) {
+    
+    const [ active, setActive ] = useState<boolean>(true);
+    const activeTimeout = useRef<NodeJS.Timeout | undefined>(undefined);
+    const wrapperRef = useRef<any>(null);
+
+    useEffect(() => {
+        if (!isMobile) return;
+        if (active) {
+            clearTimeout(activeTimeout.current);
+            activeTimeout.current = setTimeout(() => {
+                setActive(false);
+            }, 5000);
+        }
+    }, [active]);
+
+    useEffect(() => {
+        if (!isMobile) return;
+        function handleClickOutside(event: any) {
+            if (wrapperRef.current && !wrapperRef.current.contains(event.target)) {
+                setActive(false);
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+      }, [wrapperRef]);
+    
+    return (
+        <motion.div 
+            className="action-bar" 
+            initial={{ x: 150, opacity: 1 }}
+            animate={{ x: connectionState == PoolConnectionState.CONNECTED ? 0 : 150, opacity: active ? 1 : 0.20 }} 
+            transition={{ type: "spring", duration: 0.5 }} 
+            onClick={() => isMobile && setActive(true)} 
+            ref={wrapperRef}
+        >
+            <ActionBarButton buttonType='danger' mode={PoolMessageMode.DISCONNECT} icon={DisconnectIcon} messageMode={messageMode} setMessageMode={setMessageMode} />
+            <ActionBarButton buttonType='utility' mode={PoolMessageMode.SETTINGS} icon={SettingsIcon} messageMode={messageMode} setMessageMode={setMessageMode} />
+            <ActionBarButton buttonType='utility' mode={PoolMessageMode.USERS} icon={UserGroupIcon} messageMode={messageMode} setMessageMode={setMessageMode}/>
+            <div className="action-bar-button-spacer"/>
+            <ActionBarButton buttonType='feature' mode={PoolMessageMode.FILE} icon={FileIcon} messageMode={messageMode} setMessageMode={setMessageMode}/>
+            <ActionBarButton buttonType='feature' mode={PoolMessageMode.TEXT} icon={TextMessageIcon} messageMode={messageMode} setMessageMode={setMessageMode}/>
+        </motion.div>
+    )
+}
+
 const ActionBarButton = memo(ActionBarButtonComponent);
 
-// MEMO
 function ActionBarButtonComponent(props: ActionBarButtonProps) {
     return (
         <div 

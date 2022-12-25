@@ -3,36 +3,12 @@ import './App.css'
 import { DeviceType, PoolInfo, PoolUser } from './pool/pool.model'
 import { poolAction } from './store/slices/pool.slice'
 import { getStoreState, store } from './store/store'
-import { BrowserRouter, Route, Routes } from "react-router-dom"
+import { BrowserRouter, Route, Routes, useNavigate, useSearchParams } from "react-router-dom"
 import { PoolContainerView, PoolView } from './views/pool/PoolView'
-import { Pools } from './views/pool/Pools'
+import { DEFAULT_TEST_POOL_NAME, Pools } from './views/pool/Pools'
 import { mebibytesToBytes } from './helpers/file-size'
 import { FileManager } from './pool/global'
-
-const dispatch = store.dispatch
-// USERS SHOULD BE SORTED FROM SERVER
-dispatch(poolAction.initPools([
-  {
-    PoolID: "main",
-    PoolName: "Pool Test",
-    Users: [],
-    Key: 0,
-    Settings: {
-      maxTextLength: 5000,
-      maxMediaSize: mebibytesToBytes(32),
-    }
-  } as PoolInfo
-]))
-
-// {
-//   UserID: "TEST_USER_ID",
-//   DisplayName: "TEST_USER",
-//   Devices: [getStoreState().profile.device, {
-//     DeviceID: "OTHER_DEVICE_ID",
-//     DeviceType: DeviceType.DESKTOP,
-//     DeviceName: "OTHER_DEVICE_NAME",
-//   }],
-// } 
+import { profileAction } from './store/slices/profile.slice'
 
 function App() {
 
@@ -54,10 +30,10 @@ function App() {
     gateOpen ? (
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={ <Pools /> } /> 
-          <Route path="/pool" element={ <Pools /> }>
-            <Route path=":poolID" element={ <PoolContainerView /> } />
-          </Route>
+          <Route path="/" element={ <JoinPool /> } />
+          <Route path="/join-pool" element={ <JoinPool /> }/> 
+          <Route path="/pool" element={ <Pools /> } />
+          <Route path="/pool/:poolID" element={ <PoolContainerView /> } />
         </Routes>
       </BrowserRouter>  
     ) : null
@@ -65,3 +41,28 @@ function App() {
 }
 
 export default App;
+
+function JoinPool() {
+
+  let [searchParams] = useSearchParams();
+  let navigate = useNavigate();
+
+  let [ poolID, setPoolID ] = useState<string>(searchParams.get("poolid") || DEFAULT_TEST_POOL_NAME);
+  let [ displayName, setDisplayName ] = useState<string>("");
+
+  const goToPool = () => {
+    if (displayName == "") return;
+    navigate('/pool/' + poolID + "?displayName=" + displayName);
+  }
+
+  return (
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", width: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", flexDirection: "column" }}>
+        <h1>Pool Net TEST</h1>
+        <input type="text" placeholder='PoolID' style={{ padding: "10px", fontSize: "14px" }} value={poolID} onChange={(e) => setPoolID(e.target.value)} />
+        <input type="text" placeholder='Display Name' style={{ padding: "10px", fontSize: "14px" }} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+        <input type="button" value={"Go to pool: " + poolID} style={{ padding: "8px", marginTop: "20px", fontSize: "16px" }} onClick={goToPool}/>
+      </div>
+    </div>
+  )
+}

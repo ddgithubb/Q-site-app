@@ -4,11 +4,13 @@ import { DeviceType, Pool, PoolDevice, PoolInfo, PoolMessagePackage } from "../.
 
 export interface ProfileState {
     userID: string;
+    displayName: string;
     device: PoolDevice;
 }
 
 const initialState: ProfileState = {
     userID: "TEST_USER_ID",
+    displayName: "TEST_DISPLAY_NAME",
     device: {
         DeviceID: "DEVICE_ID",
         DeviceType: DeviceType.BROWSER,
@@ -22,7 +24,11 @@ const profileSlice = createSlice({
     reducers: {
         initProfile(state: ProfileState, action: PayloadAction<ProfileState>) {
             state.userID = action.payload.userID;
+            state.displayName = action.payload.displayName;
             state.device = action.payload.device;
+        },
+        setDisplayName(state: ProfileState, action: PayloadAction<string>) {
+            state.displayName = action.payload;
         }
     }
 });

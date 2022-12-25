@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE, DEFAULT_RECV_MESSAGES_CACHE } from "../../config/caching";
-import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser, PoolFileInfo, isMediaType, PoolFileProgress, PoolDownloadProgressStatus, PoolMessage, PoolNodeInfo, PoolDevice, PoolFileOffer, PoolFileOfferAndSeeders } from "../../pool/pool.model";
+import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser, PoolFileInfo, isMediaType, PoolDownloadProgressStatus, PoolMessage, PoolNodeInfo, PoolDevice, PoolFileOffer, PoolFileOfferAndSeeders } from "../../pool/pool.model";
 
 export interface PoolsState {
     pools: Pool[];
@@ -176,6 +176,7 @@ const poolSlice = createSlice({
         addMessage(state: PoolsState, action: PayloadAction<AddMessageAction>) {
             let pool = getPool(state, action);
             let msg: PoolMessage = action.payload.message;
+            msg.received = Date.now();
             //console.log("ADDING MESSAGE", msg, msg.created, pool.messages[0]?.created)
             if (pool.messages.length == 0) {
                 pool.messages.push(msg);
@@ -187,6 +188,9 @@ const poolSlice = createSlice({
                     pool.messages.splice(i, 0, msg);
                     break;
                 }
+            }
+            if (pool.messages.length > 1000) {
+                pool.messages.shift();
             }
             // if (pool.messages.length > DEFAULT_MESSAGES_CACHE) {
             //     pool.messages.shift();
@@ -256,36 +260,37 @@ const poolSlice = createSlice({
             //         return;
             //     }
             // }
-            let poolFileProgress: PoolFileProgress = {
-                fileOffer: { ...action.payload.fileInfo, seederNodeID: "" },
-                progress: 0,
-                status: PoolDownloadProgressStatus.DOWNLOADING,
-            };
-            pool.downloadQueue.push(poolFileProgress);
+            // let poolFileProgress: PoolFileProgress = {
+            //     fileOffer: { ...action.payload.fileInfo, seederNodeID: "" },
+            //     progress: 0,
+            //     status: PoolDownloadProgressStatus.DOWNLOADING,
+            // };
+            // pool.downloadQueue.push(poolFileProgress);
+            pool.downloadQueue.push({ ...action.payload.fileInfo, seederNodeID: "" });
         },
-        updateDownloadProgress(state: PoolsState, action: PayloadAction<UpdateDownloadProgressAction>) {
-            let pool = getPool(state, action);
-            for (let i = 0; i < pool.downloadQueue.length; i++) {
-                if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
-                    pool.downloadQueue[i].progress = action.payload.progress;
-                    return;
-                }
-            }
-        },
-        updateDownloadProgressStatus(state: PoolsState, action: PayloadAction<UpdateDownloadProgressStatusAction>) {
-            let pool = getPool(state, action);
-            for (let i = 0; i < pool.downloadQueue.length; i++) {
-                if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
-                    pool.downloadQueue[i].fileOffer.seederNodeID = action.payload.seederNodeID;
-                    pool.downloadQueue[i].status = action.payload.status;
-                    return;
-                }
-            }
-        },
+        // updateDownloadProgress(state: PoolsState, action: PayloadAction<UpdateDownloadProgressAction>) {
+        //     let pool = getPool(state, action);
+        //     for (let i = 0; i < pool.downloadQueue.length; i++) {
+        //         if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
+        //             pool.downloadQueue[i].progress = action.payload.progress;
+        //             return;
+        //         }
+        //     }
+        // },
+        // updateDownloadProgressStatus(state: PoolsState, action: PayloadAction<UpdateDownloadProgressStatusAction>) {
+        //     let pool = getPool(state, action);
+        //     for (let i = 0; i < pool.downloadQueue.length; i++) {
+        //         if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
+        //             pool.downloadQueue[i].fileOffer.seederNodeID = action.payload.seederNodeID;
+        //             pool.downloadQueue[i].status = action.payload.status;
+        //             return;
+        //         }
+        //     }
+        // },
         removeDownload(state: PoolsState, action: PayloadAction<RemoveDownloadAction>) {
             let pool = getPool(state, action);
             for (let i = 0; i < pool.downloadQueue.length; i++) {
-                if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
+                if (pool.downloadQueue[i].fileID == action.payload.fileID) {
                     pool.downloadQueue.splice(i, 1);
                     return;
                 }

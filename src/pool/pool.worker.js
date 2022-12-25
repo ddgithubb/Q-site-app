@@ -111,17 +111,31 @@ registerWebworker(async (message, emit) => {
         }
         storeObjectStore.put(fileOffers, poolID);
     }
-}).operation('putCacheChunk', async ({ chunks, key, deleteKey }, emit) => {
+}).operation('putCacheChunk', ({ chunks, key, deleteKey }, emit) => {
+    let resolve;
+    let promise = new Promise((res, rej) => {
+        resolve = res;
+    })
+
     let trans = objectStoreDB.transaction('pool-chunks-cache', 'readwrite');
     if (!trans) return;
 
     let poolChunksCacheStore = trans.objectStore('pool-chunks-cache');
 
-    poolChunksCacheStore.put(chunks, key);
+    let req = poolChunksCacheStore.put(chunks, key);
+
+    req.onerror = (e) => {
+        resolve(false);
+    }
+
+    req.onsuccess = (e) => {
+        resolve(true);
+    }
 
     if (deleteKey != undefined && deleteKey != "") {
         poolChunksCacheStore.delete(deleteKey);
     }
+    return promise;
 }).operation('getCacheChunk', (key, emit) => {
     let resolve;
     let promise = new Promise((res, rej) => {

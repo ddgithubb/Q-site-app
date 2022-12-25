@@ -1,12 +1,13 @@
 import * as FD from "form-data";
 
-const DOMAIN: string = "localhost";
-const API_DOMAIN: string = DOMAIN + ":8000";
-const SYNC_SERVER_DOMAIN: string = DOMAIN + ":8001";
-const VERSION: string = "v1";
+const SYNC_SERVER_DOMAIN: string = "192.168.1.140:8001";
+const SYNC_SERVER_VERSION: string = "v1";
+const SYNC_SERVER_HOST: string = "ws://" + SYNC_SERVER_DOMAIN + "/ss/" + SYNC_SERVER_VERSION + "/connect";
+
+const API_DOMAIN: string = "localhost" + ":8000";
+const API_VERSION: string = "v1";
 const HOST: string = "http://" + API_DOMAIN;
-const WSHOST: string = "ws://" + SYNC_SERVER_DOMAIN + "/connect";
-const URI: string = HOST + "/api/" + VERSION;
+const URI: string = HOST + "/api/" + API_VERSION;
 const HEARTBEAT_INTERVAL_SECONDS = 30;
 const HEARTBEAT_TIMEOUT_SECONDS = 10;
 const HEADER_REFRESHED_NAME = "x-refreshed";
@@ -90,9 +91,9 @@ function httpGetOptions() {
 }
 
 export { 
-    VERSION, 
+    API_VERSION as VERSION, 
     HOST, 
-    WSHOST, 
+    SYNC_SERVER_HOST as WSHOST, 
     URI, 
     HEARTBEAT_INTERVAL_SECONDS,
     HEARTBEAT_TIMEOUT_SECONDS,

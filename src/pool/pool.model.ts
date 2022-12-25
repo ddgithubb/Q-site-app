@@ -76,7 +76,7 @@ export interface PoolMessageDestinationInfo {
 
 export interface PoolMessageInfo {
     msgID: string;
-    received: number;
+    created: number;
 }
 
 export interface PoolInfo {
@@ -108,7 +108,7 @@ export interface Pool {
     key: number;
     connectionState: PoolConnectionState;
     activeNodes: PoolNode[];
-    downloadQueue: PoolFileProgress[];
+    downloadQueue: PoolFileOffer[];
     messages: PoolMessage[];
 }
 
@@ -165,11 +165,11 @@ export interface PoolFileOfferAndSeeders extends PoolFileInfo {
     seederNodeIDs: string[];
 } 
 
-export interface PoolFileProgress {
-    fileOffer: PoolFileOffer;
-    progress: number;
-    status: PoolDownloadProgressStatus;
-}
+// export interface PoolFileProgress {
+//     fileOffer: PoolFileOffer;
+//     progress: number;
+//     status: PoolDownloadProgressStatus;
+// }
 
 export type PoolChunkRange = number[];
 

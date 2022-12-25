@@ -6,8 +6,8 @@
     border-top: 2px solid var(--dark-color-secondary);
     margin: 0;
     padding-left: 30px;
-    padding-top: 12px;
-    padding-bottom: 25px;
+    padding-top: 10px;
+    padding-bottom: 20px;
     padding-right: 20px;
     -webkit-box-shadow: 0px 0px 10px 5px rgba(0,0,0,0.7); 
     box-shadow: 0px 0px 10px 5px rgba(0,0,0,0.7);
@@ -26,8 +26,8 @@
     flex-direction: row;
     flex-wrap: wrap;
     align-items: center;
-    margin-bottom: 15px;
-    gap: 4px 20px;
+    margin-bottom: 12px;
+    gap: 0px 20px;
 }
 
 .display-info-bar-pool-name {
@@ -71,12 +71,16 @@
 }
 
 .display-message-input-icon {
-    width: 26px;
-    height: 26px;
+    width: 25px;
+    height: 25px;
     object-fit: contain;
     cursor: pointer;
     border-radius: 5px;
     padding: 7px;
+}
+
+.display-message-send-icon {
+    margin-left: 5px;
 }
 
 .display-message-input-icon:hover {
@@ -124,7 +128,6 @@
     cursor: pointer;
     gap: 10px;
     max-width: 300px;
-    min-width: 0px;
     white-space: nowrap;
 }
 
@@ -136,13 +139,9 @@
 .display-file-name {
     flex: 1;
     font-size: 15px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 .display-file-size {
-    white-space: nowrap;
     font-size: 14px;
     color: var(--light-color-secondary)
 }
@@ -204,7 +203,7 @@
 }
 
 .display-user-devices-container {
-    margin-left: 20px;
+    margin-left: 35px;
     /* max-height: 0px; */
     /* transition: max-height 0.1s ease-in-out; */
 }
@@ -230,7 +229,7 @@
 .display-user-device-file-offer {
     display: flex;
     font-size: 13px;
-    margin-left: 20px;
+    margin-left: 40px;
     padding: 3px 0px;
     gap: 10px;
     white-space: nowrap;
@@ -314,8 +313,8 @@
 
 .display-cancel-button-icon {
     position: absolute;
-    width: 30px;
-    height: 30px;
+    width: 25px;
+    height: 25px;
     display: none;
 }
 
