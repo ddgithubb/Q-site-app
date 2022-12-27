@@ -1,4 +1,4 @@
-import { WSHOST, HEARTBEAT_TIMEOUT_SECONDS, HEARTBEAT_INTERVAL_SECONDS } from "../config/http";
+import { SYNC_SERVER_CONNECT_ENDPOINT, HEARTBEAT_TIMEOUT_SECONDS, HEARTBEAT_INTERVAL_SECONDS } from "../config/http";
 import { poolAction, UpdateConnectionStateAction } from "../store/slices/pool.slice";
 import { getStoreState, store } from "../store/store";
 import { PoolManager } from "./global";
@@ -10,7 +10,7 @@ export function initializePool(poolID: string, poolKey: number): PoolClient {
     var wsMsg: SSMessage;
     var heartbeatInterval: any = undefined;
     var heartbeatTimeout: any = undefined;
-    var ws: WebSocket = new WebSocket(WSHOST + "?poolid=" + poolID + "&displayname=" + getStoreState().profile.displayName);
+    var ws: WebSocket = new WebSocket(SYNC_SERVER_CONNECT_ENDPOINT + "?poolid=" + poolID + "&displayname=" + getStoreState().profile.displayName);
     var poolClient: PoolClient = new PoolClient(poolID, poolKey, ws);
 
     window.MainPoolClient = poolClient;
@@ -30,7 +30,7 @@ export function initializePool(poolID: string, poolKey: number): PoolClient {
         }, HEARTBEAT_INTERVAL_SECONDS * 1000);
     };
     ws.onmessage = (event) => {
-        //console.log("WS MESSAGE", event.data);
+        console.log("WS RECV", event.data);
         wsMsg = JSON.parse(event.data)
 
         if (wsMsg.Op >= 1000 && wsMsg.Op < 2000) {
@@ -140,6 +140,10 @@ export function SendSSMessage(ws: WebSocket, op: number, data?: any, prevWSMsg?:
         TargetNodeID: prevWSMsg?.TargetNodeID || targetNodeID || "",
         Data: data || null,
     }
-    //console.log("WS SEND:", JSON.stringify(msg));
+    console.log("WS SEND:", JSON.stringify(msg));
     ws.send(JSON.stringify(msg));
 }
+
+// export function validateSSVersion(): Promise<string> {
+
+// }

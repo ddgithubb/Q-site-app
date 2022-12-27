@@ -9,13 +9,22 @@ import { DEFAULT_TEST_POOL_NAME, Pools } from './views/pool/Pools'
 import { mebibytesToBytes } from './helpers/file-size'
 import { FileManager } from './pool/global'
 import { profileAction } from './store/slices/profile.slice'
+import { JoinPool } from './views/static/JoinPool'
+import { checkNAT } from './pool/pool-checks'
+import { UnsupportedPage } from './views/static/UnsupportedPage'
+import { MaintenancePage } from './views/static/MaintenancePage'
 
 function App() {
 
   const [ gateOpen, setGateOpen ] = useState<boolean>(false);
+  const [ unsupportedNAT, setUnsupportedNAT ] = useState<boolean>(false);
 
   useEffect(() => {
     let initFunc = async () => {
+      // if (!(await checkNAT())) {
+      //   setUnsupportedNAT(true);
+      //   return;
+      // }
       await FileManager.init();
       setGateOpen(true);
     }
@@ -34,35 +43,13 @@ function App() {
           <Route path="/join-pool" element={ <JoinPool /> }/> 
           <Route path="/pool" element={ <Pools /> } />
           <Route path="/pool/:poolID" element={ <PoolContainerView /> } />
+          <Route path="/maintenance" element={ <MaintenancePage /> } />
         </Routes>
       </BrowserRouter>  
+    ) : unsupportedNAT ? (
+      <UnsupportedPage />
     ) : null
   );
 }
 
 export default App;
-
-function JoinPool() {
-
-  let [searchParams] = useSearchParams();
-  let navigate = useNavigate();
-
-  let [ poolID, setPoolID ] = useState<string>(searchParams.get("poolid") || DEFAULT_TEST_POOL_NAME);
-  let [ displayName, setDisplayName ] = useState<string>("");
-
-  const goToPool = () => {
-    if (displayName == "") return;
-    navigate('/pool/' + poolID + "?displayName=" + displayName);
-  }
-
-  return (
-    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100%", width: "100%" }}>
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", flexDirection: "column" }}>
-        <h1>Pool Net TEST</h1>
-        <input type="text" placeholder='PoolID' style={{ padding: "10px", fontSize: "14px", marginBottom: "5px" }} value={poolID} onChange={(e) => setPoolID(e.target.value)} />
-        <input type="text" placeholder='Display Name' style={{ padding: "10px", fontSize: "14px" }} value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
-        <input type="button" value={"Connect to " + poolID} style={{ padding: "8px", marginTop: "20px", fontSize: "16px" }} onClick={goToPool}/>
-      </div>
-    </div>
-  )
-}

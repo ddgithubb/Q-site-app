@@ -1,4 +1,3 @@
-import { HEARTBEAT_INTERVAL_SECONDS, HEARTBEAT_TIMEOUT_SECONDS, WSHOST } from "../config/http";
 import { SSLwtMessage, SSMessage } from "./sync-server.model";
 import { PoolClient } from "./pool-client";
 import { FILE_ID_LENGTH, Pool, PoolChunkRange, PoolConnectionState, PoolFileInfo, PoolFileOffer, PoolImageOffer, PoolMessageDestinationInfo } from "./pool.model";
@@ -6,10 +5,6 @@ import { store } from "../store/store";
 import { poolAction, UpdateConnectionStateAction } from "../store/slices/pool.slice";
 import { initializePool } from "./sync-server-client";
 import { FileManager } from "./global";
-
-declare global {
-    interface Window { MainPoolClient: PoolClient; }
-}
 
 export class PoolManagerClass {
     private connectedPools: Map<string, PoolClient>;
