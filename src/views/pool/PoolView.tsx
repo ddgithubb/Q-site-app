@@ -162,7 +162,7 @@ function ActionBarComponent({ connectionState, messageMode, setMessageMode }: { 
             clearTimeout(activeTimeout.current);
             activeTimeout.current = setTimeout(() => {
                 setActive(false);
-            }, 5000);
+            }, 10000);
         }
     }, [active]);
 
@@ -183,7 +183,7 @@ function ActionBarComponent({ connectionState, messageMode, setMessageMode }: { 
         <motion.div 
             className="action-bar" 
             initial={{ x: 150, opacity: 1 }}
-            animate={{ x: connectionState == PoolConnectionState.CONNECTED ? 0 : 150, opacity: active ? 1 : 0.20 }} 
+            animate={{ x: connectionState == PoolConnectionState.CONNECTED ? 0 : 150, opacity: active ? 1 : 0.50 }} 
             transition={{ type: "spring", duration: 0.5 }} 
             onClick={() => isMobile && setActive(true)} 
             ref={wrapperRef}

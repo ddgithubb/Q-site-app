@@ -6,7 +6,8 @@ import reportWebVitals from './reportWebVitals';
 import { store } from './store/store';
 import { Provider } from 'react-redux';
 import { isMobile } from 'react-device-detect';
-import { PRODUCTION } from './config/env';
+import { PRODUCTION_MODE } from './config/env';
+import { PoolClient } from './pool/pool-client';
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
@@ -42,8 +43,29 @@ if (rootEl) {
   rootEl.style.width = "100vw";
 }
 
-if (PRODUCTION) {
-  console.log = () => {}
-  console.error = () => {}
-  console.debug = () => {}
+declare global {
+  interface Window { 
+    MainPoolClient: PoolClient; 
+    toggleConsoleLogs: (consoleLogs: boolean) => void;
+  }
+}
+
+var consoleLog = console.log;
+var consoleErr = console.error;
+var consoleDeb = console.debug;
+
+window.toggleConsoleLogs = (consoleLogs: boolean) => {
+  if (consoleLogs) {
+    console.log = consoleLog;
+    console.error = consoleErr;
+    console.debug = consoleDeb;
+  } else {
+    console.log = () => {}
+    console.error = () => {}
+    console.debug = () => {}
+  }
+}
+
+if (PRODUCTION_MODE) {
+  window.toggleConsoleLogs(false);
 }
