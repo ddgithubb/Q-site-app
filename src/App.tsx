@@ -12,7 +12,7 @@ import { profileAction } from './store/slices/profile.slice'
 import { JoinPool } from './views/static/JoinPool'
 import { checkNAT } from './pool/pool-checks'
 import { UnsupportedPage } from './views/static/UnsupportedPage'
-import { MaintenancePage } from './views/static/MaintenancePage'
+import { validateSSState, MaintenancePage } from './views/static/MaintenancePage'
 
 function App() {
 
@@ -21,19 +21,16 @@ function App() {
 
   useEffect(() => {
     let initFunc = async () => {
-      // if (!(await checkNAT())) {
-      //   setUnsupportedNAT(true);
-      //   return;
-      // }
+      if (!(await checkNAT())) {
+        setUnsupportedNAT(true);
+        return;
+      }
+      await validateSSState();
       await FileManager.init();
       setGateOpen(true);
     }
     initFunc();
   }, [])
-
-  // useEffect(() => {
-  //   console.log(gateOpen);
-  // }, [gateOpen]);
 
   return (
     gateOpen ? (

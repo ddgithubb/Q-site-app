@@ -106,6 +106,7 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
 
     const [ messageMode, setMessageMode ] = useState<PoolMessageMode>(PoolMessageMode.TEXT);
     const pool = useSelector((state: GlobalState) => state.pool.pools.at(poolKey));
+    const navigate = useNavigate();
     const userMap = useMemo<UserMapType>(() => {
         if (!pool) return new Map<string, PoolUserActiveDevices>;
         let userMap = new Map<string, PoolUserActiveDevices>;
@@ -127,6 +128,13 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
         //console.log(userMap);
         return userMap;
     }, [pool?.Users, pool?.activeNodes]);
+
+    useEffect(() => {
+        if (messageMode == PoolMessageMode.DISCONNECT) {
+            PoolManager.disconnectFromPool(poolID, poolKey);
+            navigate('/');
+        }
+    }, [messageMode]);
 
     return (
         <div className="pool-view">
@@ -178,7 +186,7 @@ function ActionBarComponent({ connectionState, messageMode, setMessageMode }: { 
             document.removeEventListener("mousedown", handleClickOutside);
         };
       }, [wrapperRef]);
-    
+
     return (
         <motion.div 
             className="action-bar" 
