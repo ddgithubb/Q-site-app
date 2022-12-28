@@ -38,7 +38,7 @@ export class PoolManagerClass {
         return true;
     }
 
-    disconnectToPool(poolID: string, poolKey: number): boolean {
+    disconnectFromPool(poolID: string, poolKey: number): boolean {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
         store.dispatch(poolAction.updateConnectionState({

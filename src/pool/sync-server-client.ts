@@ -1,6 +1,7 @@
 import { SYNC_SERVER_CONNECT_ENDPOINT, HEARTBEAT_TIMEOUT_SECONDS, HEARTBEAT_INTERVAL_SECONDS } from "../config/http";
 import { poolAction, UpdateConnectionStateAction } from "../store/slices/pool.slice";
 import { getStoreState, store } from "../store/store";
+import { validateSSState } from "../views/static/MaintenancePage";
 import { PoolManager } from "./global";
 import { PoolClient } from "./pool-client";
 import { PoolConnectionState } from "./pool.model";
@@ -60,6 +61,7 @@ export function initializePool(poolID: string, poolKey: number): PoolClient {
     };
     ws.onerror = async (error: any) => {
         console.error("WS ERROR", error);
+        validateSSState();
     };
 
     return poolClient;
@@ -143,7 +145,3 @@ export function SendSSMessage(ws: WebSocket, op: number, data?: any, prevWSMsg?:
     console.log("WS SEND:", JSON.stringify(msg));
     ws.send(JSON.stringify(msg));
 }
-
-// export function validateSSVersion(): Promise<string> {
-
-// }

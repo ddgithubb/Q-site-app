@@ -103,10 +103,12 @@ const poolSlice = createSlice({
         },
         resetPool(state: PoolsState, action: PayloadAction<ResetPoolAction>) {
             let pool = getPool(state, action);
-            //pool.myNode = action.payload.node;
             pool.activeNodes = [];
-            // pool.downloadQueue = [];
             pool.messages = [];
+
+            // TEMP
+            pool.Users = [];
+            // TEMP
         },
         updateConnectionState(state: PoolsState, action: PayloadAction<UpdateConnectionStateAction>) {
             let pool = getPool(state, action);
