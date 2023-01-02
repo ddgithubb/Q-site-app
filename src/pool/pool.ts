@@ -1,4 +1,3 @@
-import { SSLwtMessage, SSMessage } from "./sync-server.model";
 import { PoolClient } from "./pool-client";
 import { FILE_ID_LENGTH, Pool, PoolChunkRange, PoolConnectionState, PoolFileInfo, PoolFileOffer, PoolImageOffer, PoolMessageDestinationInfo } from "./pool.model";
 import { store } from "../store/store";

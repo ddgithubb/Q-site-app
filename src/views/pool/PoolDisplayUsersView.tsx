@@ -1,9 +1,7 @@
-import { memo, useEffect, useRef, useState } from "react";
-import { DeviceType, PoolNode, PoolUser } from "../../pool/pool.model";
+import { memo, useRef, useState } from "react";
 import { IndicatorDot } from "../components/IndicatorDot";
 
 import AccordionArrowIcon from '../../assets/accordion-arrow.png';
-import { AnimatePresence, motion } from "framer-motion";
 import { PoolUserActiveDevices } from "./PoolView";
 import { fileSizeToString } from "../../helpers/file-size";
 
@@ -11,11 +9,12 @@ import BrowserIcon from '../../assets/browser.png';
 import DesktopIcon from '../../assets/desktop.png';
 import MobilePhoneIcon from '../../assets/mobile-phone.png';
 import { PoolManager } from "../../pool/global";
+import { DeviceType, PoolUserInfo } from "../../sstypes/sync_server.v1";
 
 
 export interface PoolDisplayUsersViewParams {
     poolID: string
-    users: PoolUser[];
+    users: PoolUserInfo[];
     userMap: Map<string, PoolUserActiveDevices>;
     hidden: boolean;
 }
@@ -38,13 +37,13 @@ function PoolDisplayUsersViewComponent({ poolID, users, userMap, hidden }: PoolD
             {/* Use react virtualized (since it is a static set of data, define height and specifically specify height in DOM insetad of in CSS)*/}
             {
                 users.map((user) => {
-                    let userActiveDevices = userMap.get(user.UserID);
+                    let userActiveDevices = userMap.get(user.userId);
                     return userActiveDevices ? (
                     // MAKE THE HEADER ACCORDION (with icon, only allow one accordion by just recording which current accordion)
-                    <div className="display-user-accordion-container" key={user.UserID}>
-                        <div className="display-user-header elipsify-container" onClick={() => toggleAccordion(user.UserID)}>
-                            <img className="display-user-accordion-arrow" src={AccordionArrowIcon} aria-expanded={openAccordionUsersMap.get(user.UserID)} />
-                            <div className="display-user-display-name elipsify-content">{user.DisplayName}</div>
+                    <div className="display-user-accordion-container" key={user.userId}>
+                        <div className="display-user-header elipsify-container" onClick={() => toggleAccordion(user.userId)}>
+                            <img className="display-user-accordion-arrow" src={AccordionArrowIcon} aria-expanded={openAccordionUsersMap.get(user.userId)} />
+                            <div className="display-user-display-name elipsify-content">{user.displayName}</div>
                             <div className="display-user-info-point elipsify-extra">
                                 <IndicatorDot type={userActiveDevices.activeDevices ? "online" : "offline"} size="small" />
                                 {userActiveDevices.activeDevices ? userActiveDevices.activeDevices.size + " Device" + (userActiveDevices.activeDevices.size > 1 ? "s" : "") + " Active" : " Offline"}
@@ -52,23 +51,23 @@ function PoolDisplayUsersViewComponent({ poolID, users, userMap, hidden }: PoolD
                         </div>
                         {/* <AnimatePresence> */}
                             {
-                                openAccordionUsersMap.get(user.UserID) && (
+                                openAccordionUsersMap.get(user.userId) && (
                                     // <motion.div initial={{ maxHeight: 0 }} animate={{ maxHeight: 400 }} exit={{ maxHeight: 0 }}>
                                         <div className="display-user-devices-container">
                                             {
-                                                user.Devices.slice().sort((a, b) => (userActiveDevices!.activeDevices!.has(a.DeviceID) ? 0 : 1) - (userActiveDevices!.activeDevices!.has(b.DeviceID) ? 0 : 1)).map((node) => (
-                                                    <div className={"display-user-device-container " + "display-user-device-container" + (userActiveDevices?.activeDevices?.has(node.DeviceID) ? "-online" : "-offline")} key={node.DeviceID}>
+                                                user.devices.slice().sort((a, b) => (userActiveDevices!.activeDevices!.has(a.deviceId) ? 0 : 1) - (userActiveDevices!.activeDevices!.has(b.deviceId) ? 0 : 1)).map((node) => (
+                                                    <div className={"display-user-device-container " + "display-user-device-container" + (userActiveDevices?.activeDevices?.has(node.deviceId) ? "-online" : "-offline")} key={node.deviceId}>
                                                         {/* TODO: device type icon */}
                                                         <div className="display-user-device-header">
                                                             <img src={
-                                                                node.DeviceType == DeviceType.BROWSER ? BrowserIcon :
-                                                                node.DeviceType == DeviceType.DESKTOP ? DesktopIcon :
-                                                                node.DeviceType == DeviceType.MOBILE ? MobilePhoneIcon : BrowserIcon
+                                                                node.deviceType == DeviceType.BROWSER ? BrowserIcon :
+                                                                node.deviceType == DeviceType.DESKTOP ? DesktopIcon :
+                                                                node.deviceType == DeviceType.MOBILE ? MobilePhoneIcon : BrowserIcon
                                                             } height="20" width="20" />
-                                                            <span>{node.DeviceName}</span>
+                                                            <span>{node.deviceName}</span>
                                                         </div>
                                                         {
-                                                            userActiveDevices?.activeDevices?.get(node.DeviceID)?.fileOffers.map((fileOffer) => (
+                                                            userActiveDevices?.activeDevices?.get(node.deviceId)?.fileOffers.map((fileOffer) => (
                                                                 // PoolFileInfo type (change in model)
                                                                 <div className="display-user-device-file-offer" key={fileOffer.fileID}>
                                                                     <span className="display-user-device-file-name" onClick={() => PoolManager.sendRequestFileToPool(poolID, fileOffer)}>{fileOffer.fileName}</span> 

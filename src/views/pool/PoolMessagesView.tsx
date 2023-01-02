@@ -3,12 +3,12 @@ import sanitizeHtml from 'sanitize-html';
 import { fileSizeToString } from '../../helpers/file-size';
 import { formatDate, formatTime, minutesToMillisecond } from '../../helpers/time';
 import { FileManager, PoolManager } from '../../pool/global';
-import { PoolFileInfo, PoolMessageType, PoolMessage, PoolNodeState, PoolUser, PoolUpdateNodeState, PoolFileOffer, PoolImageOffer } from '../../pool/pool.model';
-import './PoolMessagesView.css'
+import { PoolFileInfo, PoolMessageType, PoolMessage, PoolNodeState, PoolUpdateNodeState, PoolFileOffer, PoolImageOffer } from '../../pool/pool.model';
+import './PoolMessagesView.css';
 
 import DownloadIcon from '../../assets/download.png';
 import FileIcon from '../../assets/file.png';
-import { PoolUserActiveDevices, UserMapType } from './PoolView';
+import { UserMapType } from './PoolView';
 
 const CONSISTENT_MESSAGE_INTERVAL: number = minutesToMillisecond(5);
 const MIN_MESSAGE_HEIGHT: number = 28;
@@ -146,7 +146,7 @@ function PoolMessagesViewComponent({ poolID, messages, userMap, downloadQueue }:
                         case PoolMessageType.NODE_STATE:
                             let nodeState: PoolUpdateNodeState = msg.data;
                             messageContentElement = 
-                                <NodeStateComponent displayName={userMap.get(nodeState.userID)?.user.DisplayName} nodeState={nodeState} />;
+                                <NodeStateComponent displayName={userMap.get(nodeState.userID)?.user.displayName} nodeState={nodeState} />;
                             break;
                         case PoolMessageType.TEXT:
                             let text: string = msg.data;
@@ -208,7 +208,7 @@ function PoolMessagesViewComponent({ poolID, messages, userMap, downloadQueue }:
                         <div className={"pool-message-container" + (hasHeader ? " pool-header-spacer" : "")} key={msg.msgID}>
                             {
                                 hasHeader ? (
-                                    <HeaderComponent displayName={userMap.get(msg.userID)?.user.DisplayName} msg={msg} />
+                                    <HeaderComponent displayName={userMap.get(msg.userID)?.user.displayName} msg={msg} />
                                 ) : (
                                     <div className="pool-message-date pool-message-portable-date">{formatTime(msg.created)}</div>
                                 )
