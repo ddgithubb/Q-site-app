@@ -1,6 +1,7 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE, DEFAULT_RECV_MESSAGES_CACHE } from "../../config/caching";
-import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolUser, PoolFileInfo, isMediaType, PoolDownloadProgressStatus, PoolMessage, PoolNodeInfo, PoolDevice, PoolFileOffer, PoolFileOfferAndSeeders } from "../../pool/pool.model";
+import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolFileInfo, isMediaType, PoolDownloadProgressStatus, PoolMessage, PoolFileOffer, PoolFileOfferAndSeeders } from "../../pool/pool.model";
+import { PoolDeviceInfo, PoolUserInfo } from "../../sstypes/sync_server.v1";
 
 export interface PoolsState {
     pools: Pool[];
@@ -22,7 +23,7 @@ export interface UpdateConnectionStateAction extends PoolAction {
 }
 
 export interface UpdateUserAction extends PoolAction {
-    nodeInfo: PoolNodeInfo;
+    userInfo: PoolUserInfo;
 }
 
 export interface RemoveUserAction extends PoolAction {
@@ -81,10 +82,10 @@ const poolSlice = createSlice({
             let poolsInfo = action.payload
             for (let i = 0; i < action.payload.length; i++) {
                 state.pools.push({
-                    PoolID: poolsInfo[i].PoolID,
-                    PoolName: poolsInfo[i].PoolName,
-                    Users: poolsInfo[i].Users,
-                    PoolSettings: poolsInfo[i].Settings,
+                    poolID: poolsInfo[i].poolID,
+                    poolName: poolsInfo[i].poolName,
+                    users: poolsInfo[i].users,
+                    poolSettings: poolsInfo[i].settings,
                     key: i,
                     connectionState: PoolConnectionState.CLOSED,
                     myNode: {} as PoolNode,
@@ -107,7 +108,7 @@ const poolSlice = createSlice({
             pool.messages = [];
 
             // TEMP
-            pool.Users = [];
+            pool.users = [];
             // TEMP
         },
         updateConnectionState(state: PoolsState, action: PayloadAction<UpdateConnectionStateAction>) {
@@ -127,50 +128,25 @@ const poolSlice = createSlice({
         // },
         updateUser(state: PoolsState, action: PayloadAction<UpdateUserAction>) {
             let pool = getPool(state, action);
-            let nodeInfo = action.payload.nodeInfo;
+            let userInfo = action.payload.userInfo;
             let foundUser = false;
-            for (const user of pool.Users) {
-                if (user.UserID == nodeInfo.UserID) {
-                    user.DisplayName = nodeInfo.DisplayName;
-                    let foundDevice = false;
-                    for (const device of user.Devices) {
-                        if (device.DeviceID == nodeInfo.DeviceID) {
-                            device.DeviceName = nodeInfo.DeviceName;
-                            device.DeviceType = nodeInfo.DeviceType;
-                            foundDevice = true;
-                            break;
-                        }
-                    }
-                    if (!foundDevice) {
-                        let device: PoolDevice = {
-                            DeviceID: nodeInfo.DeviceID,
-                            DeviceType: nodeInfo.DeviceType,
-                            DeviceName: nodeInfo.DeviceName,
-                        }
-                        user.Devices.push(device);
-                    }
+            for (const user of pool.users) {
+                if (user.userId == userInfo.userId) {
+                    user.displayName = userInfo.displayName;
+                    user.devices = userInfo.devices;
                     foundUser = true;
                     break;
                 }
             }
             if (!foundUser) {
-                let user: PoolUser = {
-                    UserID: nodeInfo.UserID,
-                    DisplayName: nodeInfo.DisplayName,
-                    Devices: [{
-                        DeviceID: nodeInfo.DeviceID,
-                        DeviceType: nodeInfo.DeviceType,
-                        DeviceName: nodeInfo.DeviceName,
-                    }],
-                }
-                pool.Users.push(user);
+                pool.users.push(userInfo);
             }
         },
         removeUser(state: PoolsState, action: PayloadAction<RemoveUserAction>) {
             let pool = getPool(state, action);
-            for (let i = 0; i < pool.Users.length; i++) {
-                if (pool.Users[i].UserID == action.payload.userID) {
-                    pool.Users.splice(i, 1);
+            for (let i = 0; i < pool.users.length; i++) {
+                if (pool.users[i].userId == action.payload.userID) {
+                    pool.users.splice(i, 1);
                     break;
                 }
             }

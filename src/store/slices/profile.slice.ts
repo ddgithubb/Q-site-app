@@ -1,20 +1,20 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE } from "../../config/caching";
-import { DeviceType, Pool, PoolDevice, PoolInfo, PoolMessagePackage } from "../../pool/pool.model";
+import { DeviceType, PoolDeviceInfo } from "../../sstypes/sync_server.v1";
 
 export interface ProfileState {
     userID: string;
     displayName: string;
-    device: PoolDevice;
+    device: PoolDeviceInfo;
 }
 
 const initialState: ProfileState = {
     userID: "TEST_USER_ID",
     displayName: "TEST_DISPLAY_NAME",
     device: {
-        DeviceID: "DEVICE_ID",
-        DeviceType: DeviceType.BROWSER,
-        DeviceName: "Main device",
+        deviceId: "DEVICE_ID",
+        deviceType: DeviceType.BROWSER,
+        deviceName: "Main device",
     }
 }
 

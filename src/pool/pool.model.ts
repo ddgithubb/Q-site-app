@@ -1,3 +1,5 @@
+import { DeviceType, PoolUserInfo } from "../sstypes/sync_server.v1";
+
 export const NODE_ID_LENGTH = 10;
 export const MESSAGE_ID_LENGTH = 21;
 export const FILE_ID_LENGTH = 21;
@@ -41,11 +43,11 @@ export enum PoolDownloadProgressStatus {
     UNAVAILABLE,
 }
 
-export enum DeviceType {
-    BROWSER,
-    DESKTOP,
-    MOBILE,
-}
+// export enum DeviceType {
+//     BROWSER,
+//     DESKTOP,
+//     MOBILE,
+// }
 
 export interface PoolMessage {
     msgID: string;
@@ -80,31 +82,31 @@ export interface PoolMessageInfo {
 }
 
 export interface PoolInfo {
-    PoolID: string;
-    PoolName: string;
-    Users: PoolUser[];
-    Key: number;
-    Settings: PoolSettings
+    poolID: string;
+    poolName: string;
+    users: PoolUserInfo[];
+    key: number;
+    settings: PoolSettings;
 }
 
-export interface PoolNodeInfo {
-    UserID: string;
-    DisplayName: string;
-    DeviceID: string;
-    DeviceName: string;
-    DeviceType: DeviceType;
-}
+// export interface PoolNodeInfo {
+//     UserID: string;
+//     DisplayName: string;
+//     DeviceID: string;
+//     DeviceName: string;
+//     DeviceType: DeviceType;
+// }
 
-export interface PoolBasicNode {
-    NodeID: string;
-    Path: number[];
-}
+// export interface PoolBasicNode {
+//     NodeID: string;
+//     Path: number[];
+// }
 
 export interface Pool {
-    PoolID: string;
-    PoolName: string;
-    Users: PoolUser[];
-    PoolSettings: PoolSettings;
+    poolID: string;
+    poolName: string;
+    users: PoolUserInfo[];
+    poolSettings: PoolSettings;
     key: number;
     connectionState: PoolConnectionState;
     activeNodes: PoolNode[];
@@ -121,20 +123,7 @@ export interface PoolUpdateLatestInfo {
     messagesOnly: boolean;
     lastMessageID: string;
     fileOffersAndSeeders: PoolFileOfferAndSeeders[];
-    //activeNodes: PoolNode[];
     messages: PoolMessage[];
-}
-
-export interface PoolUser {
-    UserID: string;
-    DisplayName: string;
-    Devices: PoolDevice[];
-}
-
-export interface PoolDevice {
-    DeviceID: string;    
-    DeviceType: DeviceType;
-    DeviceName: string;
 }
 
 export interface PoolNode {
@@ -164,12 +153,6 @@ export interface PoolFileOffer extends PoolFileInfo {
 export interface PoolFileOfferAndSeeders extends PoolFileInfo {
     seederNodeIDs: string[];
 } 
-
-// export interface PoolFileProgress {
-//     fileOffer: PoolFileOffer;
-//     progress: number;
-//     status: PoolDownloadProgressStatus;
-// }
 
 export type PoolChunkRange = number[];
 

@@ -1,21 +1,20 @@
 
-import { motion } from 'framer-motion'
-import { useState, useRef, memo, MouseEventHandler, useEffect, useCallback } from 'react'
+import { useState, useRef, memo, useEffect } from 'react'
 import { CircularProgressbar } from 'react-circular-progressbar'
 import { fileSizeToString } from '../../helpers/file-size'
 import { FileManager, PoolManager } from '../../pool/global'
-import { Pool, PoolConnectionState, PoolDownloadProgressStatus, PoolFileInfo, PoolFileOffer, PoolUser } from '../../pool/pool.model'
+import { Pool, PoolConnectionState, PoolDownloadProgressStatus, PoolFileOffer } from '../../pool/pool.model'
 import { IndicatorDot } from '../components/IndicatorDot'
 import { PoolDisplayUsersView } from './PoolDisplayUsersView'
-import { PoolMessageMode, PoolUserActiveDevices, UserMapType } from './PoolView'
-import { isMobile } from 'react-device-detect';
+import { PoolMessageMode, UserMapType } from './PoolView'
+import { isMobile } from 'react-device-detect'
 
 import './PoolDisplayView.css'
-import AddIcon from '../../assets/add.png';
-import AddImageIcon from '../../assets/add-image.png';
-import FileIcon from '../../assets/file.png';
-import CancelIcon from '../../assets/trash.png';
-import SendIcon from '../../assets/send.png';
+import AddIcon from '../../assets/add.png'
+import AddImageIcon from '../../assets/add-image.png'
+import FileIcon from '../../assets/file.png'
+import CancelIcon from '../../assets/trash.png'
+import SendIcon from '../../assets/send.png'
 
 export interface PoolDisplayViewParams {
     pool: Pool;
@@ -37,7 +36,7 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
     const sendTextMessage = () => {
         if (!textAreaElement) return;
         if (textAreaElement.innerHTML == "") return;
-        PoolManager.sendTextMessageToPool(pool.PoolID, textAreaElement.innerHTML)
+        PoolManager.sendTextMessageToPool(pool.poolID, textAreaElement.innerHTML)
         cachedTextMessage.current = "";
         textAreaElement.innerHTML = "";
     }
@@ -63,19 +62,19 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
     const sendFileOffer = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files) return;
         for (let i = 0; i < e.target.files.length; i++) {
-            PoolManager.sendFileOfferToPool(pool.PoolID, e.target.files[i]);
+            PoolManager.sendFileOfferToPool(pool.poolID, e.target.files[i]);
         }
     }
 
     const sendImageOffer = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (!e.target.files) return;
         for (let i = 0; i < e.target.files.length; i++) {
-            PoolManager.sendImageOfferToPool(pool.PoolID, e.target.files[i]);
+            PoolManager.sendImageOfferToPool(pool.poolID, e.target.files[i]);
         }
     }
 
     const sendRetractFileOffer = (fileID: string) => {
-        PoolManager.sendRetractFileOffer(pool.PoolID, fileID);
+        PoolManager.sendRetractFileOffer(pool.poolID, fileID);
     }
 
     const textAreaKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -94,7 +93,7 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
             shiftKeyDown.current = true;
         }
         if (!textAreaElement) return
-        if (textAreaElement?.innerHTML.length >= (pool.PoolSettings.maxTextLength || 5000)) {
+        if (textAreaElement?.innerHTML.length >= (pool.poolSettings.maxTextLength || 5000)) {
             e.preventDefault();
         }
         textAreaElement?.scrollTo({ top: textAreaElement.scrollHeight });
@@ -116,11 +115,11 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
     return (
         <div className="display-container">
             <div className="display-overlay-container">
-                <DownloadQueue poolID={pool.PoolID} downloadQueue={pool.downloadQueue} />
+                <DownloadQueue poolID={pool.poolID} downloadQueue={pool.downloadQueue} />
             </div>
             <div className="display-info-bar">
                 <div className="display-info-bar-pool-name">
-                    {pool.PoolName}
+                    {pool.poolName}
                 </div>
                 {
                     pool.connectionState == PoolConnectionState.CONNECTED ? (
@@ -142,7 +141,7 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                 <div className="display-info-bar-status">
                     <IndicatorDot type="offline"/>
                     <div className="display-info-bar-subtitle">
-                        {pool.Users.length} Total User{(pool.Users.length || 1) > 1 ? "s" : ""}
+                        {pool.users.length} Total User{(pool.users.length || 1) > 1 ? "s" : ""}
                     </div>
                 </div>
             </div>
@@ -172,7 +171,7 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                 </div>
                 {/* delete file(s) button with function to delete multiple files by just clicking*/}
                 {
-                    FileManager.getFileOffers(pool.PoolID)?.map((poolFileInfo) => (
+                    FileManager.getFileOffers(pool.poolID)?.map((poolFileInfo) => (
                         <div className="display-cancel-button-container" key={poolFileInfo.fileID} onClick={() => sendRetractFileOffer(poolFileInfo.fileID)}>
                             <div className="display-file-container display-cancel-button-child elipsify-container">
                                 <img src={FileIcon} height={22} width={22} />
@@ -184,7 +183,7 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                     ))
                 }
             </div>
-            <PoolDisplayUsersView poolID={pool.PoolID || ""} users={pool.Users || []} userMap={userMap} hidden={messageMode != PoolMessageMode.USERS}/>
+            <PoolDisplayUsersView poolID={pool.poolID || ""} users={pool.users || []} userMap={userMap} hidden={messageMode != PoolMessageMode.USERS}/>
             <input className="hideInput" id="display-file-input" type="file" onChange={sendFileOffer} />
             <input className="hideInput" id="display-image-input" type="file" accept=".png,.jpg" onChange={sendImageOffer} />
         </div>

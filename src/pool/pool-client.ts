@@ -1,4 +1,4 @@
-import { SSNodeStatusData, SSReportCodes, SSReportNodeData, SSSDPData, SSStatus, SSMessage, SSAddNodesData, SSRemoveNodeData } from "./sync-server.model";
+// import { SSNodeStatusData, SSReportCodes, SSReportNodeData, SSSDPData, SSStatus, SSMessage, SSAddNodesData, SSRemoveNodeData } from "./sync-server.model";
 import { PoolNodeState, Pool, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageAction, PoolUpdateNodeState, PoolFileRequest, PoolMessageSourceInfo, PoolMessageDestinationInfo, MESSAGE_ID_LENGTH, FILE_ID_LENGTH, PoolMessageInfo, PoolChunkRange, PoolImageOffer, PoolDownloadProgressStatus, PoolRequestMediaHint, PoolMessage, PoolRemoveFileRequest, PoolRetractFileOffer, PoolFileInfo, PoolFileOffer, PoolFileOfferAndSeeders } from "./pool.model";
 import { getStoreState, store } from "../store/store";
 import { AddActiveNodeAction, AddDownloadAction, AddFileOfferAction, AddMessageAction, PoolAction, poolAction, RemoveActiveNodeAction, RemoveFileOfferAction, RemoveUserAction, ResetPoolAction, UpdateDownloadProgressStatusAction, UpdateUserAction } from "../store/slices/pool.slice";
@@ -6,7 +6,7 @@ import { CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR, CHUNK_SIZE, DEFAULT_RECV_MESSAGES_CAC
 import { nanoid } from "nanoid";
 import { createBinaryMessage, parseBinaryMessage, setBinaryMessageDestVisited } from "./pool-binary-message";
 import { FileManager, PoolManager } from "./global";
-import { SendSSMessage } from "./sync-server-client";
+import { reportNodeDisconnect } from "./sync-server-client";
 import { compactChunkRanges, getCacheChunkNumberFromByteSize, getCacheChunkNumberFromChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
 import { CacheChunkData, CacheChunkMapData, FileOfferData } from "./pool-file-manager";
 import { mebibytesToBytes } from "../helpers/file-size";
@@ -14,6 +14,7 @@ import EventEmitter from "events";
 import { Image } from 'image-js';
 import { checkFileExist } from "../helpers/file-exists";
 import { profileAction, ProfileState } from "../store/slices/profile.slice";
+import { SSMessage_AddNodeData, SSMessage_InitPoolData, SSMessage_RemoveNodeData, SSMessage_RemoveUserData, SSMessage_UpdateUserData } from "../sstypes/sync_server.v1";
 
 const MAXIMUM_DC_BUFFER_SIZE = mebibytesToBytes(15);
 const PREVIEW_IMAGE_DIMENSION = 10;
@@ -28,22 +29,22 @@ const LOW_BUFFER_THRESHOLD = MAXIMUM_DC_BUFFER_SIZE / CHUNK_SIZE;
 //     inQueue?: string[]; // dest nodeID
 // }
 
-interface NodeConnection {
+export interface PoolNodePosition {
+    path: number[];
+    partnerInt: number;
+    centerCluster: boolean;
+    parentClusterNodeIDs: string[][]; // 3, 3
+    childClusterNodeIDs: string[][]; // 2, 3
+}
+
+interface PoolNodeConnection {
     position: number;
     connection: RTCPeerConnection;
     dataChannel: RTCDataChannel;
     closeEvent: EventEmitter;
 }
 
-interface NodePosition {
-    Path: number[];
-    PartnerInt: number;
-    CenterCluster: boolean;
-    ParentClusterNodeIDs: string[][];
-    ChildClusterNodeIDs: string[][];
-}
-
-interface FileRequest extends PoolFileRequest {
+interface OngoingFileRequest extends PoolFileRequest {
     startChunkNumber: number;
     wrappedAround: boolean;
     nextChunkNumber: number;
@@ -52,7 +53,7 @@ interface FileRequest extends PoolFileRequest {
     cancelled: boolean;
 }
 
-interface AvailableFile {
+interface PoolAvailableFile {
     fileOfferAndSeeders: PoolFileOfferAndSeeders;
     lastRequestedNodeID: string;
     lastProgress: number;
@@ -71,17 +72,17 @@ export class PoolClient {
     poolKey: number;
     ws: WebSocket;
     nodeID: string;
-    nodePosition: NodePosition;
-    nodeConnections: Map<string, NodeConnection>;
+    nodePosition: PoolNodePosition;
+    nodeConnections: Map<string, PoolNodeConnection>;
     lastPromoted: number;
     reconnect: boolean;
     new: boolean;
-    latest: boolean;
+    isOnlyNode: boolean;
     receivedMessages: PoolMessageInfo[];
     activeNodes: Map<string, number[]>; // key: nodeID, value: lastSeenPath
-    availableFiles: Map<string, AvailableFile>; // key: fileID, value: availableFile
+    availableFiles: Map<string, PoolAvailableFile>; // key: fileID, value: availableFile
     mediaHinterNodeIDs: Map<string, string[]>; // key: fileID, value: hinterNodeIDs
-    curFileRequests: Map<string, FileRequest[]>;
+    curFileRequests: Map<string, OngoingFileRequest[]>;
     sendingCache: boolean;
     sendCacheMap: Map<string, string[]>; // key: cacheChunkKey // value: dests 
     sendCacheQueue: CacheChunkData[]; // value: cacheChunkKey
@@ -96,17 +97,17 @@ export class PoolClient {
         this.poolKey = poolKey;
         this.ws = ws;
         this.nodeID = "";
-        this.nodePosition = {} as NodePosition;
-        this.nodeConnections = new Map<string, NodeConnection>();
+        this.nodePosition = {} as PoolNodePosition;
+        this.nodeConnections = new Map<string, PoolNodeConnection>();
         this.lastPromoted = Date.now();
         this.reconnect = true;
+        this.isOnlyNode = false;
         this.new = true;
-        this.latest = false;
         this.receivedMessages = [];
         this.activeNodes = new Map<string, number[]>;
-        this.availableFiles = new Map<string, AvailableFile>;
+        this.availableFiles = new Map<string, PoolAvailableFile>;
         this.mediaHinterNodeIDs = new Map<string, string[]>;
-        this.curFileRequests = new Map<string, FileRequest[]>;
+        this.curFileRequests = new Map<string, OngoingFileRequest[]>;
         this.sendingCache = false;
         this.sendCacheMap = new Map<string, string[]>;
         this.sendCacheQueue = [];
@@ -127,7 +128,7 @@ export class PoolClient {
     }
 
     getPanelNumber() {
-        return this.nodePosition.Path[this.nodePosition.Path.length - 1]
+        return this.nodePosition.path[this.nodePosition.path.length - 1]
     }
 
     disconnectFromPool() {
@@ -135,7 +136,7 @@ export class PoolClient {
         this.ws.close();
     }
 
-    closeNodeConnection(nodeConnection: NodeConnection) {
+    closeNodeConnection(nodeConnection: PoolNodeConnection) {
         nodeConnection.dataChannel.close();
         nodeConnection.connection.close();
         nodeConnection.closeEvent.emit('closed');
@@ -165,57 +166,35 @@ export class PoolClient {
         }
     }
 
+    updateIsOnlyNode() {
+        this.isOnlyNode = false;
+        if (this.nodePosition.centerCluster) {
+            this.isOnlyNode = true
+            for (let i = 0; i < 3; i++) {
+                for (let j = 0; j < 3; j++) {
+                    if (this.nodePosition.parentClusterNodeIDs[i][j] != "" && this.nodePosition.parentClusterNodeIDs[i][j] != this.nodeID) {
+                        this.isOnlyNode = false;
+                        break;
+                    }
+                }
+                if (!this.isOnlyNode) break;
+            }
+            if (this.isOnlyNode) {
+                this.new = false;
+            }
+        }
+    }
+
     ////////////////////////////////////////////////////////////////
     // Node setup functions
     ////////////////////////////////////////////////////////////////
 
-    updateNodePosition(nodePosition: NodePosition, myNodeID: string) {
+    updateNodePosition(nodePosition: PoolNodePosition) {
         this.nodePosition = nodePosition;
-        this.nodeID = myNodeID;
-        //console.log(this.nodePosition);
+        console.log("Node position", this.nodePosition);
         this.lastPromoted = Date.now();
-        this.checkForEmptyBufferQueues();
-        if (this.new) {
-            // let profileState = getStoreState().profile;
-            // let fileOffers: FileOffer[] = FileManager.getFileOffers(this.poolID) || [];
-            // let poolFileInfos: PoolFileInfo[] = fileOffers.map((fileOffer) => {
-            //     return {
-            //         ...fileOffer,
-            //         file: undefined,
-            //     };
-            // });
-            // let myNode: PoolNode = {
-            //     nodeID: this.nodeID,
-            //     userID: profileState.userID,
-            //     deviceID: profileState.device.DeviceID,
-            //     state: PoolNodeState.ACTIVE,
-            //     lastSeenPath: this.nodePosition.Path,
-            //     fileOffers: poolFileInfos,
-            // };
-            store.dispatch(poolAction.resetPool({
-                key: this.poolKey,
-                //myNode: myNode,
-            } as ResetPoolAction));
-            console.log("NodeID", this.nodeID)
-            this.new = false;
-
-            if (nodePosition.CenterCluster) {
-                let onlyNode = true;
-                for (let i = 0; i < 3; i++) {
-                    for (let j = 0; j < 3; j++) {
-                        if (nodePosition.ParentClusterNodeIDs[i][j] != "" && nodePosition.ParentClusterNodeIDs[i][j] != this.nodeID) {
-                            onlyNode = false;
-                            break;
-                        }
-                    }
-                    if (!onlyNode) break;
-                }
-                if (onlyNode) {
-                    this.latest = true;
-                    //this.addActiveNodeMessage(this.createMessage(PoolMessageType.NODE_STATUS, PoolMessageAction.DEFAULT, myNode));
-                }
-            }
-        }
+        this.checkForUneededBufferQueues();
+        this.updateIsOnlyNode();
     }
 
     getOffer(targetNodeID: string): Promise<string> {
@@ -240,7 +219,7 @@ export class PoolClient {
         let connection = initializeRTCPeerConnection();
         let dataChannel = initializeMainDataChannel(connection);
         
-        let nodeConnection: NodeConnection = {
+        let nodeConnection: PoolNodeConnection = {
             position: position,
             connection: connection,
             dataChannel: dataChannel,
@@ -268,7 +247,7 @@ export class PoolClient {
         return promise;
     }
 
-    answerOffer(targetNodeID: string, sdpOffer: SSSDPData): Promise<string> {
+    answerOffer(targetNodeID: string, sdp: string): Promise<string> {
         let resolve: (value: string | PromiseLike<string>) => void;
         let reject: (reason?: any) => void;
         let promise = new Promise<string>((res, rej) => {
@@ -290,7 +269,7 @@ export class PoolClient {
         let connection = initializeRTCPeerConnection();
         let dataChannel = initializeMainDataChannel(connection);
 
-        let nodeConnection: NodeConnection = {
+        let nodeConnection: PoolNodeConnection = {
             position: position,
             connection: connection,
             dataChannel: dataChannel,
@@ -313,14 +292,14 @@ export class PoolClient {
             resolve(JSON.stringify(connection.localDescription));
         }
     
-        connection.setRemoteDescription(JSON.parse(sdpOffer.SDP)).then(() => {
+        connection.setRemoteDescription(JSON.parse(sdp)).then(() => {
             connection.createAnswer().then((d) => connection.setLocalDescription(d)).catch(() => reject())
         }).catch(() => reject());
 
         return promise;
     }
 
-    connectNode(targetNodeID: string, sdpAnswer: SSSDPData): Promise<void> {
+    connectNode(targetNodeID: string, sdp: string): Promise<void> {
         let nodeConnection = this.nodeConnections.get(targetNodeID);
         let resolve: (value: void | PromiseLike<void>) => void;
         let reject: (reason?: any) => void
@@ -348,7 +327,7 @@ export class PoolClient {
         };
 
         nodeConnection.dataChannel.addEventListener('open', connectionOpened);
-        nodeConnection.connection.setRemoteDescription(JSON.parse(sdpAnswer.SDP)).catch(() => reject());
+        nodeConnection.connection.setRemoteDescription(JSON.parse(sdp)).catch(() => reject());
 
         return promise;
     }
@@ -359,9 +338,6 @@ export class PoolClient {
             this.closeNodeConnection(nodeConnection);
             this.nodeConnections.delete(targetNodeID);
         }
-        // if (disconnectData.RemoveFromPool) {
-        //     this.sendInactiveNodeSignal(targetNodeID);
-        // }
     }
 
     verifyConnection(targetNodeID: string): boolean {
@@ -372,69 +348,79 @@ export class PoolClient {
         return true;
     }
 
-    addNodes(addNodesData: SSAddNodesData) {
-        for (const node of addNodesData) {
-            let myNode = node.NodeID == this.nodeID;
-            
-            // TEMP (although update user is needed, it should be done with another function)
-            let updateUserAction: UpdateUserAction = {
-                key: this.poolKey,
-                nodeInfo: node.NodeInfo,
-            };
-            store.dispatch(poolAction.updateUser(updateUserAction));
-            if (myNode) {
-                store.dispatch(profileAction.initProfile({
-                    userID: node.NodeInfo.UserID,
-                    displayName: node.NodeInfo.DisplayName,
-                    device: {
-                        DeviceID: node.NodeInfo.DeviceID,
-                        DeviceName: node.NodeInfo.DeviceName,
-                        DeviceType: node.NodeInfo.DeviceType,
-                    },
-                } as ProfileState))
-            }
-            // TEMP
-            
-            let poolNode: PoolNode = {
-                nodeID: node.NodeID,
-                userID: node.NodeInfo.UserID,
-                deviceID: node.NodeInfo.DeviceID,
-                fileOffers: [],
-            };
+    initPool(initPoolData: SSMessage_InitPoolData) {
+        if (!initPoolData.myNode) return;
 
-            if (myNode) {
-                let fileOffersData: FileOfferData[] = FileManager.getFileOffers(this.poolID) || [];
-                let fileOffers: PoolFileOffer[] = fileOffersData.map((fileOffer) => {
-                    return {
-                        ...fileOffer,
-                        seederNodeID: this.nodeID,
-                        file: undefined,
-                    };
-                });
-                poolNode.fileOffers = fileOffers;
-            }
+        store.dispatch(poolAction.resetPool({
+            key: this.poolKey,
+        } as ResetPoolAction));
 
-            this.activeNodes.set(node.NodeID, node.Path);
-            store.dispatch(poolAction.addActiveNode({
-                key: this.poolKey,
-                node: poolNode,
-            } as AddActiveNodeAction));
-            
-            if (this.latest || myNode) {
-                let updateNodeState: PoolUpdateNodeState = {
-                    nodeID: poolNode.nodeID,
-                    userID: poolNode.userID,
-                    state: PoolNodeState.ACTIVE,
-                };
-                let msg: PoolMessage = this.createMessage(PoolMessageType.NODE_STATE, updateNodeState, this.createNodeStateMsgID(node.NodeID, node.Timestamp, PoolNodeState.ACTIVE));
-                msg.created = node.Timestamp;
-                this.addAndCheckMessage(msg);
-            }
+        // TEMP
+        let myUser = initPoolData.updateUsers[0].userInfo!;
+        store.dispatch(profileAction.initProfile({
+            userID: myUser.userId,
+            displayName: myUser.displayName,
+            device: {
+                deviceId: myUser.devices[0].deviceId,
+                deviceType: myUser.devices[0].deviceType,
+                deviceName: myUser.devices[0].deviceName,
+            },
+        } as ProfileState))
+        // TEMP
+
+        console.log("NodeID", initPoolData.myNode.nodeId);
+        this.nodeID = initPoolData.myNode.nodeId;
+        this.addNode(initPoolData.myNode);
+
+        let fileOffersData: FileOfferData[] = FileManager.getFileOffers(this.poolID) || [];
+        for (const fileOfferData of fileOffersData) {
+            this.addAvailableFileOffer({
+                ...fileOfferData,
+                seederNodeID: this.nodeID,
+            });
+        }
+
+        for (const updateUser of initPoolData.updateUsers) {
+            this.updateUser(updateUser);
+        }
+
+        for (const addNodeData of initPoolData.initNodes) {
+            this.addNode(addNodeData, false);
         }
     }
 
-    removeNode(removeNodeData: SSRemoveNodeData) {
-        let nodeID: string = removeNodeData.NodeID;
+    addNode(addNodeData: SSMessage_AddNodeData, addAsMessage: boolean = true) {
+        let poolNode: PoolNode = {
+            nodeID: addNodeData.nodeId,
+            userID: addNodeData.userId,
+            deviceID: addNodeData.deviceId,
+            fileOffers: [],
+        };
+
+        this.activeNodes.set(addNodeData.nodeId, addNodeData.path);
+        store.dispatch(poolAction.addActiveNode({
+            key: this.poolKey,
+            node: poolNode,
+        } as AddActiveNodeAction));
+
+        if (addAsMessage) {
+            let updateNodeState: PoolUpdateNodeState = {
+                nodeID: poolNode.nodeID,
+                userID: poolNode.userID,
+                state: PoolNodeState.ACTIVE,
+            };
+            let msg: PoolMessage = this.createMessage(
+                PoolMessageType.NODE_STATE, 
+                updateNodeState, 
+                this.createNodeStateMsgID(addNodeData.nodeId, addNodeData.timestamp, PoolNodeState.ACTIVE),
+            );
+            msg.created = addNodeData.timestamp;
+            this.addAndCheckMessage(msg);
+        }
+    }
+
+    removeNode(removeNodeData: SSMessage_RemoveNodeData) {
+        let nodeID: string = removeNodeData.nodeId;
 
         this.activeNodes.delete(nodeID);
 
@@ -447,16 +433,8 @@ export class PoolClient {
         }
         if (!existingNode) return;
 
-        // TEMP
-        store.dispatch(poolAction.removeUser({
-            key: this.poolKey,
-            userID: existingNode.userID, 
-        } as RemoveUserAction));
-        // TEMP
-
         for (let i = 0; i < existingNode.fileOffers.length; i++) {
             this.removeAvailableFileOffer(existingNode.fileOffers[i].fileID, nodeID);
-            // FileManager.completeFileDownload(existingNode.fileOffers[i].fileID);
         }
 
         store.dispatch(poolAction.removeActiveNode({
@@ -470,13 +448,33 @@ export class PoolClient {
             state: PoolNodeState.INACTIVE,
         };
 
-        let msg: PoolMessage = this.createMessage(PoolMessageType.NODE_STATE, updateNodeState, this.createNodeStateMsgID(nodeID, removeNodeData.Timestamp, PoolNodeState.INACTIVE));
-        msg.created = removeNodeData.Timestamp;
+        let msg: PoolMessage = this.createMessage(
+            PoolMessageType.NODE_STATE, 
+            updateNodeState, 
+            this.createNodeStateMsgID(nodeID, removeNodeData.timestamp, PoolNodeState.INACTIVE),
+        );
+        msg.created = removeNodeData.timestamp;
         this.addAndCheckMessage(msg);
         
-        for (const promotedNode of removeNodeData.PromotedNodes) {
-            this.activeNodes.set(promotedNode.NodeID, promotedNode.Path);
+        for (const promotedNode of removeNodeData.promotedNodes) {
+            this.activeNodes.set(promotedNode.nodeId, promotedNode.path);
         }
+    }
+
+    updateUser(updateUserData: SSMessage_UpdateUserData) {
+        if (!updateUserData.userInfo) return;
+        let updateUserAction: UpdateUserAction = {
+            key: this.poolKey,
+            userInfo: updateUserData.userInfo,
+        };
+        store.dispatch(poolAction.updateUser(updateUserAction));
+    }
+
+    removeUser(removeUserData: SSMessage_RemoveUserData) {
+        store.dispatch(poolAction.removeUser({
+            key: this.poolKey,
+            userID: removeUserData.userId, 
+        } as RemoveUserAction));
     }
 
     ////////////////////////////////////////////////////////////////
@@ -487,7 +485,7 @@ export class PoolClient {
         let pool = this.getPool();
         let lastMessageID: string = "";
         let messages: PoolMessage[] = [];
-        if (this.latest) {
+        if (!this.new) {
             for (let i = pool.messages.length - 1; i >= 0; i--) {
                 if (pool.messages[i].received != undefined && pool.messages[i].received! < this.lastPromoted) {
                     lastMessageID = pool.messages[i].msgID; 
@@ -497,10 +495,21 @@ export class PoolClient {
                 }
             }
         }
+        let myFileOffers: PoolFileOfferAndSeeders[] = [];
+        if (this.new || this.isOnlyNode) {
+            let fileOffersData: FileOfferData[] = FileManager.getFileOffers(this.poolID) || [];
+            for (const fileOfferData of fileOffersData) {
+                myFileOffers.push({
+                    ...fileOfferData,
+                    seederNodeIDs: [this.nodeID],
+                });
+            }
+        }
         this.sendDataChannel(nodeID, JSON.stringify(this.createMessagePackage(PoolMessageType.GET_LATEST, PoolMessageAction.REQUEST, {
-            messagesOnly: !this.latest ? false : true, //!this.latest ? false : pool.activeNodes.length != 0 ? false : true
+            messagesOnly: this.new ? false : true,
             lastMessageID: lastMessageID,
             messages: lastMessageID != "" ? messages : [],
+            fileOffersAndSeeders: myFileOffers,
         } as PoolUpdateLatestInfo, nodeID)));
     }
 
@@ -510,7 +519,11 @@ export class PoolClient {
         let lastMessageID = latestRequest.lastMessageID;
 
         if (lastMessageID != "") {
-            this.addMessages(latestRequest.messages)
+            this.addMessages(latestRequest.messages);
+        }
+
+        for (const fileOfferAndSeeders of latestRequest.fileOffersAndSeeders) {
+            this.addAvailableFileOfferAndSeeders(fileOfferAndSeeders);
         }
 
         let fileOffersAndSeeders: PoolFileOfferAndSeeders[] = [];
@@ -522,7 +535,6 @@ export class PoolClient {
             messagesOnly: messagesOnly,
             lastMessageID: lastMessageID,
             fileOffersAndSeeders: fileOffersAndSeeders,
-            //activeNodes: messagesOnly ? [] : pool.activeNodes,
             messages: [],
         }
         
@@ -547,7 +559,7 @@ export class PoolClient {
     }
 
     sendTextMessage(text: string) {
-        if (text == "" || text.length >= this.getPool().PoolSettings.maxTextLength || text.replaceAll(" ", "").replaceAll("&nbsp;", "").replaceAll("<br>", "") == "") {
+        if (text == "" || text.length >= this.getPool().poolSettings.maxTextLength || text.replaceAll(" ", "").replaceAll("&nbsp;", "").replaceAll("<br>", "") == "") {
             return;
         }
         this.handleMessage(this.createMessagePackage(PoolMessageType.TEXT, PoolMessageAction.DEFAULT, text.trim()));
@@ -566,7 +578,7 @@ export class PoolClient {
     }
     
     async sendImageOffer(file: File) {
-        if (file.size > this.getPool().PoolSettings.maxMediaSize) {
+        if (file.size > this.getPool().poolSettings.maxMediaSize) {
             this.sendFileOffer(file);
             return;
         }
@@ -821,7 +833,7 @@ export class PoolClient {
 
         //console.log("pass", poolFileRequest.cacheChunksCovered);
 
-        let fileRequest: FileRequest = poolFileRequest as FileRequest;
+        let fileRequest: OngoingFileRequest = poolFileRequest as OngoingFileRequest;
         let concFileRequests = this.curFileRequests.get(poolFileRequest.fileID);
         if (!concFileRequests) {
             fileRequest.nextChunkNumber = 0;
@@ -1071,7 +1083,7 @@ export class PoolClient {
                 // if (dests.length != 0) {
                 //     this.sendChunk(fileID, chunkNumber, cacheChunk[i - 1], dests, this.nodePosition.PartnerInt, nextChunk);
                 // }
-                this.sendChunk(fileID, chunkNumber, cacheChunk[i - 1], dests, this.nodePosition.PartnerInt, nextChunk);
+                this.sendChunk(fileID, chunkNumber, cacheChunk[i - 1], dests, this.nodePosition.partnerInt, nextChunk);
             }
             nextChunk();
         }
@@ -1082,7 +1094,7 @@ export class PoolClient {
 
     addAndSendChunksCovered(poolFileRequest: PoolFileRequest, partnerIntPath: number) {
         if (!this.availableFiles.has(poolFileRequest.fileID)) return;
-        if (partnerIntPath != this.nodePosition.PartnerInt && poolFileRequest.requestingNodeID != this.nodeID) return;
+        if (partnerIntPath != this.nodePosition.partnerInt && poolFileRequest.requestingNodeID != this.nodeID) return;
         if (FileManager.hasMediaCache(poolFileRequest.fileID)) {
             let totalSize = this.availableFiles.get(poolFileRequest.fileID)!.fileOfferAndSeeders.totalSize;
             console.log(getCacheChunkNumberFromByteSize(totalSize));
@@ -1147,7 +1159,7 @@ export class PoolClient {
             };
             this.availableFiles.set(fileOffer.fileID, availableFile);
             //console.log("SETTING AVAILABLE FILE", this.availableFiles.size);
-        } else if (fileOffer.totalSize != availableFile.fileOfferAndSeeders.totalSize) return;
+        }
         //console.log(availableFile.fileOfferAndSeeders.seederNodeIDs.length, availableFile.fileOfferAndSeeders.seederNodeIDs.includes(fileOffer.seederNodeID), fileOffer.seederNodeID)
         if (!availableFile.fileOfferAndSeeders.seederNodeIDs.includes(fileOffer.seederNodeID)) {
             availableFile.fileOfferAndSeeders.seederNodeIDs.push(fileOffer.seederNodeID);
@@ -1156,6 +1168,19 @@ export class PoolClient {
                 fileOffer: fileOffer,
             } as AddFileOfferAction));
             //console.log(this.getPool().Users, this.getPool().myNode);
+        }
+    }
+
+    addAvailableFileOfferAndSeeders(fileOfferAndSeeders: PoolFileOfferAndSeeders) {
+        for (const seederNodeID of fileOfferAndSeeders.seederNodeIDs) {
+            let fileOffer: PoolFileOffer = {
+                seederNodeID: seederNodeID,
+                fileID: fileOfferAndSeeders.fileID,
+                originNodeID: fileOfferAndSeeders.originNodeID,
+                fileName: fileOfferAndSeeders.fileName,
+                totalSize: fileOfferAndSeeders.totalSize,
+            };
+            this.addAvailableFileOffer(fileOffer);
         }
     }
 
@@ -1205,70 +1230,9 @@ export class PoolClient {
                     this.addAvailableFileOffer(fileOffer);
                 }
             }
-            // store.dispatch(poolAction.updateActiveNodes({
-            //     key: this.poolKey,
-            //     activeNodes: updateLatestInfo.activeNodes,
-            // } as UpdateActiveNodesAction));
-            // this.activeNodes.clear();
-            // this.availableFiles.clear();
-            // // ADD OWN NODE
-            // for (let i = 0; i < updateLatestInfo.activeNodes.length; i++) {
-            //     let node = updateLatestInfo.activeNodes[i];
-            //     this.activeNodes.set(node.nodeID, node.lastSeenPath);
-            //     for (let j = 0; j < node.fileOffers.length; j++) {
-            //         this.addAvailableFileOffer(node.fileOffers[j]);
-            //     }
-            // }
         }
-        this.latest = true;
+        this.new = false;
     }
-
-    // addActiveNode(node: PoolNode): boolean {
-    //     //console.log("ADDING ACTIVE NODE", msg.data.nodeID, this.activeNodes.has(msg.data.nodeID));
-    //     if (this.activeNodes.has(node.nodeID)) return false;
-    //     this.activeNodes.set(node.nodeID, node.lastSeenPath);
-    //     store.dispatch(poolAction.addActiveNode({
-    //         key: this.poolKey,
-    //         node: node,
-    //     } as AddActiveNodeAction));
-    //     for (let i = 0; i < node.fileOffers.length; i++) {
-    //         this.addAvailableFileOffer(node.fileOffers[i]);
-    //     }
-    //     //console.log(this.getPool().activeNodes);
-    //     return true;
-    // }
-
-    // removeActiveNode(nodeUpdate: PoolUpdateNodeState) {
-    //     let nodeID: string = nodeUpdate.nodeID;
-    //     if (!this.activeNodes.has(nodeID)) return false;
-    //     this.activeNodes.delete(nodeID);
-    //     let existingNode: PoolNode | undefined = undefined;
-    //     for (const node of this.getPool().activeNodes) {
-    //         if (node.nodeID == nodeID) {
-    //             existingNode = node;
-    //             break;
-    //         }
-    //     }
-    //     if (existingNode) {
-    //         for (let i = 0; i < existingNode.fileOffers.length; i++) {
-    //             this.removeAvailableFileOffer(existingNode.fileOffers[i].fileID, nodeID);
-    //             // FileManager.completeFileDownload(existingNode.fileOffers[i].fileID);
-    //         }
-    //         store.dispatch(poolAction.removeActiveNode({
-    //             key: this.poolKey,
-    //             nodeID: nodeID,
-    //         } as RemoveActiveNodeAction));
-    //     }
-    //     return true;
-    // }
-
-    // addActiveNodeMessage(msg: PoolMessageView) {
-    //     if (this.addActiveNode(msg.data)) this.addMessage(msg);
-    // }
-
-    // removeActiveNodeMessage(msg: PoolMessageView) {
-    //     if (this.removeActiveNode(msg.data)) this.addMessage(msg);
-    // }
 
     removeFileRequest(removeFileRequestData: PoolRemoveFileRequest) {
         let fileRequests = this.curFileRequests.get(removeFileRequestData.fileID);
@@ -1356,7 +1320,7 @@ export class PoolClient {
                 break;
             case PoolMessageType.IMAGE_OFFER:
                 let imageOffer: PoolImageOffer = msg.data;
-                if (imageOffer.totalSize > this.getPool().PoolSettings.maxMediaSize) break;
+                if (imageOffer.totalSize > this.getPool().poolSettings.maxMediaSize) break;
                 this.addAvailableFileOffer(imageOffer);
                 if (imageOffer.seederNodeID != this.nodeID) {
                     FileManager.addFileDownload(this.poolID, this.poolKey, imageOffer, true);
@@ -1465,7 +1429,7 @@ export class PoolClient {
                 }
             }
 
-            if (partnerIntPath == this.nodePosition.PartnerInt && fileSize) {
+            if (partnerIntPath == this.nodePosition.partnerInt && fileSize) {
                 FileManager.cacheFileChunk(parsedMsg.fileID, parsedMsg.chunkNumber, fileSize, parsedMsg.payload)
             }
 
@@ -1485,7 +1449,7 @@ export class PoolClient {
     broadcastMessage(data: string | Uint8Array, src: PoolMessageSourceInfo, dests: PoolMessageDestinationInfo[] | undefined, fromNodeID: string, partnerIntPath: number | null = null) {
         let panelNumber = this.getPanelNumber();
         let sent = false;
-        let restrictToOwnPanel = partnerIntPath != null && src.nodeID != this.nodeID && partnerIntPath != this.nodePosition.PartnerInt;
+        let restrictToOwnPanel = partnerIntPath != null && src.nodeID != this.nodeID && partnerIntPath != this.nodePosition.partnerInt;
         let srcPath = this.activeNodes.get(src.nodeID);
         if (!srcPath) srcPath = src.path;
 
@@ -1494,8 +1458,8 @@ export class PoolClient {
 
         if (dests) {
             for (let i = 0; i < 3; i++) {
-                let nodeID = this.nodePosition.ParentClusterNodeIDs[panelNumber][i];
-                if (i != this.nodePosition.PartnerInt && nodeID != "") {
+                let nodeID = this.nodePosition.parentClusterNodeIDs[panelNumber][i];
+                if (i != this.nodePosition.partnerInt && nodeID != "") {
                     //if (partnerIntPath == null || (i == partnerIntPath && !isADest)) {
                     if (partnerIntPath == null || (i == partnerIntPath && nodeID != fromNodeID)) {
                         this.sendDataChannel(nodeID, data);
@@ -1525,19 +1489,19 @@ export class PoolClient {
                 for (let i = 0; i < 3; i++) {
                     if (restrictToOwnPanel && i != panelNumber) continue;
                     for (let j = 0; j < 3; j++) {
-                        let nodeID = this.nodePosition.ParentClusterNodeIDs[i][j];
+                        let nodeID = this.nodePosition.parentClusterNodeIDs[i][j];
                         if (nodeID != "" && nodeID != this.nodeID && nodeID == dests[destIndex].nodeID) {
                             //parentClusterDirection[i].push(dests[destIndex]);
                             // if (!modifiedDests) dests = dests.slice();
                             // modifiedDests = true;
                             // dests.splice(destIndex, 1);
-                            if (i == panelNumber && j != this.nodePosition.PartnerInt) {
+                            if (i == panelNumber && j != this.nodePosition.partnerInt) {
                                 // Sets boundaries to when it's allowed to send to its own panel
                                 if (
                                     partnerIntPath == null || 
-                                    this.nodePosition.PartnerInt == partnerIntPath || 
+                                    this.nodePosition.partnerInt == partnerIntPath || 
                                     partnerIntPath == j || 
-                                    this.nodePosition.ParentClusterNodeIDs[panelNumber][partnerIntPath] == ""
+                                    this.nodePosition.parentClusterNodeIDs[panelNumber][partnerIntPath] == ""
                                 ) {
                                     //console.log("SENDING TO SAME PANEL:", nodeID);
                                     this.sendDataChannel(nodeID, data);
@@ -1558,9 +1522,9 @@ export class PoolClient {
                 if (!destPath) continue;
 
                 let matches = 0;
-                if (this.nodePosition.Path.length <= destPath.length) {
-                    for (let i = 0; i < this.nodePosition.Path.length; i++) {
-                        if (this.nodePosition.Path[i] == destPath[i]) {
+                if (this.nodePosition.path.length <= destPath.length) {
+                    for (let i = 0; i < this.nodePosition.path.length; i++) {
+                        if (this.nodePosition.path[i] == destPath[i]) {
                             matches++;
                         } else {
                             matches = 0;
@@ -1570,7 +1534,7 @@ export class PoolClient {
                 }
 
                 if (matches == 0) {
-                    if (this.nodePosition.CenterCluster) {
+                    if (this.nodePosition.centerCluster) {
                         this.panelSwitches[0][destPath[0]] = true;    
                     } else {
                         this.panelSwitches[0][2] = true;   
@@ -1615,15 +1579,15 @@ export class PoolClient {
             }
         } else {
             for (let i = 0; i < 3; i++) {
-                let nodeID = this.nodePosition.ParentClusterNodeIDs[panelNumber][i];
-                if (i != this.nodePosition.PartnerInt && nodeID != "") {
+                let nodeID = this.nodePosition.parentClusterNodeIDs[panelNumber][i];
+                if (i != this.nodePosition.partnerInt && nodeID != "") {
                     if (
                         nodeID != fromNodeID && 
                         (
                             partnerIntPath == null || 
-                            this.nodePosition.PartnerInt == partnerIntPath || 
+                            this.nodePosition.partnerInt == partnerIntPath || 
                             partnerIntPath == i || 
-                            this.nodePosition.ParentClusterNodeIDs[panelNumber][partnerIntPath] == ""
+                            this.nodePosition.parentClusterNodeIDs[panelNumber][partnerIntPath] == ""
                         )
                     ) {
                         this.sendDataChannel(nodeID, data);
@@ -1659,9 +1623,9 @@ export class PoolClient {
     private getDirectionOfMessage(srcPath: number[]): MessageDirection {
         let sendToParent = false;
         let sendToChild = true;
-        if (this.nodePosition.Path.length < srcPath.length) {
-            for (let i = 0; i < this.nodePosition.Path.length; i++) {
-                if (this.nodePosition.Path[i] != srcPath[i]) {
+        if (this.nodePosition.path.length < srcPath.length) {
+            for (let i = 0; i < this.nodePosition.path.length; i++) {
+                if (this.nodePosition.path[i] != srcPath[i]) {
                     sendToParent = false;
                     sendToChild = true;
                     break;
@@ -1670,7 +1634,7 @@ export class PoolClient {
                     sendToChild = false;
                 }
             }
-        } else if (this.nodePosition.Path.length == srcPath.length && this.nodePosition.Path.every((v, i) => v == srcPath[i])) {
+        } else if (this.nodePosition.path.length == srcPath.length && this.nodePosition.path.every((v, i) => v == srcPath[i])) {
             sendToParent = true;
             sendToChild = true;
         }
@@ -1684,7 +1648,7 @@ export class PoolClient {
         return MessageDirection.NONE;
     }
 
-    private setDataChannelFunctions(nodeConnection: NodeConnection, targetNodeID: string, sentOffer: boolean) {
+    private setDataChannelFunctions(nodeConnection: PoolNodeConnection, targetNodeID: string, sentOffer: boolean) {
         nodeConnection.dataChannel.binaryType = 'arraybuffer';
         nodeConnection.dataChannel.bufferedAmountLowThreshold = CHUNK_SIZE;
         nodeConnection.dataChannel.onbufferedamountlow = () => {
@@ -1694,13 +1658,12 @@ export class PoolClient {
 
         nodeConnection.dataChannel.onopen = () => {
             console.log("DATA CHANNEL WITH", targetNodeID, "OPENED");
-            if (!this.latest) {
-                //this.sendActiveNodeSignal(targetNodeID);
+            if (this.new) {
                 this.sendGetLatest(targetNodeID);
             } else if (sentOffer) {
                 let isNeighbourNode = false
                 for (let i = 0; i < 3; i++) {
-                    if (this.nodePosition.ParentClusterNodeIDs[this.getPanelNumber()][i] == targetNodeID) {
+                    if (this.nodePosition.parentClusterNodeIDs[this.getPanelNumber()][i] == targetNodeID) {
                         isNeighbourNode = true;
                         break
                     }
@@ -1727,7 +1690,8 @@ export class PoolClient {
         }
 
         nodeConnection.dataChannel.onclose = (e) => {
-            SendSSMessage(this.ws, 2006, { ReportCode: SSReportCodes.DISCONNECT_REPORT } as SSReportNodeData, undefined, targetNodeID);
+            reportNodeDisconnect(this.ws, targetNodeID);
+            //SendSSMessage(this.ws, 2006, { ReportCode: SSReportCodes.DISCONNECT_REPORT } as SSReportNodeData, undefined, targetNodeID);
             let dataChannelBufferQueue = this.DCBufferQueues[nodeConnection.position];
             for (let i = 0; i < dataChannelBufferQueue.length; i++) {
                 if (this.reconnect) {
@@ -1779,10 +1743,10 @@ export class PoolClient {
     private sendToParentClusterPanel(panelNumber: number, data: string | Uint8Array, partnerIntPath: number | null = null): boolean {
         let sent = false;
         if (partnerIntPath != null) {
-            if (this.sendDataChannel(this.nodePosition.ParentClusterNodeIDs[panelNumber][partnerIntPath], data)) return true;
+            if (this.sendDataChannel(this.nodePosition.parentClusterNodeIDs[panelNumber][partnerIntPath], data)) return true;
         }
         for (let i = 0; i < 3; i++) {
-            if (this.sendDataChannel(this.nodePosition.ParentClusterNodeIDs[panelNumber][i], data)) sent = true;
+            if (this.sendDataChannel(this.nodePosition.parentClusterNodeIDs[panelNumber][i], data)) sent = true;
             if (partnerIntPath != null && sent) {
                 return true;
             }
@@ -1793,10 +1757,10 @@ export class PoolClient {
     private sendToChildClusterPanel(panelNumber: number, data: string | Uint8Array, partnerIntPath: number | null = null): boolean {
         let sent = false;
         if (partnerIntPath != null) {
-            if (this.sendDataChannel(this.nodePosition.ChildClusterNodeIDs[panelNumber][partnerIntPath], data)) return true;
+            if (this.sendDataChannel(this.nodePosition.childClusterNodeIDs[panelNumber][partnerIntPath], data)) return true;
         }
         for (let i = 0; i < 3; i++) {
-            if (this.sendDataChannel(this.nodePosition.ChildClusterNodeIDs[panelNumber][i], data)) sent = true;
+            if (this.sendDataChannel(this.nodePosition.childClusterNodeIDs[panelNumber][i], data)) sent = true;
             if (partnerIntPath != null && sent) {
                 return true;
             }
@@ -1808,7 +1772,7 @@ export class PoolClient {
         let position = 0;
         for (let i = 0; i < 3; i++) {
             for (let j = 0; j < 3; j++) {
-                if (this.nodePosition.ParentClusterNodeIDs[i][j] == nodeID) {
+                if (this.nodePosition.parentClusterNodeIDs[i][j] == nodeID) {
                     return position;
                 }
                 position++;
@@ -1816,7 +1780,7 @@ export class PoolClient {
         }
         for (let i = 0; i < 2; i++) {
             for (let j = 0; j < 3; j++) {
-                if (this.nodePosition.ChildClusterNodeIDs[i][j] == nodeID) {
+                if (this.nodePosition.childClusterNodeIDs[i][j] == nodeID) {
                     return position;
                 }
                 position++;
@@ -1828,10 +1792,10 @@ export class PoolClient {
     private getNodeFromPosition(position: number): string | undefined {
         let nodeID: string;
         if (position < 9) {
-            nodeID = this.nodePosition.ParentClusterNodeIDs[Math.floor(position/3)][position % 3];
+            nodeID = this.nodePosition.parentClusterNodeIDs[Math.floor(position/3)][position % 3];
         } else {
             position -= 9;
-            nodeID = this.nodePosition.ChildClusterNodeIDs[Math.floor(position/3)][position % 3];
+            nodeID = this.nodePosition.childClusterNodeIDs[Math.floor(position/3)][position % 3];
         }
         if (nodeID == "") {
             return undefined;
@@ -1856,11 +1820,11 @@ export class PoolClient {
         //console.log("ADDING TO BUFFER QUEUE", position, this.curDCBufferQueueLength, this.maxDCBufferQueueLength)
     }
 
-    private checkForEmptyBufferQueues() {
+    private checkForUneededBufferQueues() {
         let position = 0;
         for (let i = 0; i < 3; i++) {
             for (let j = 0; j < 3; j++) {
-                if (this.nodePosition.ParentClusterNodeIDs[i][j] == "") {
+                if (this.nodePosition.parentClusterNodeIDs[i][j] == "") {
                     this.curDCBufferQueueLength -= this.DCBufferQueues[position].length;
                     this.DCBufferQueues[position] = [];
                 }
@@ -1869,7 +1833,7 @@ export class PoolClient {
         }
         for (let i = 0; i < 2; i++) {
             for (let j = 0; j < 3; j++) {
-                if (this.nodePosition.ChildClusterNodeIDs[i][j] == "") {
+                if (this.nodePosition.childClusterNodeIDs[i][j] == "") {
                     this.curDCBufferQueueLength -= this.DCBufferQueues[position].length;
                     this.DCBufferQueues[position] = [];
                 }
@@ -1879,7 +1843,7 @@ export class PoolClient {
         this.triggerDCBufferAvailableToFill();
     }
 
-    private flushDCBufferQueue(nodeConnection: NodeConnection) {
+    private flushDCBufferQueue(nodeConnection: PoolNodeConnection) {
         let i = 0
         let dataChannelBufferQueue = this.DCBufferQueues[nodeConnection.position];
         if (dataChannelBufferQueue.length == 0) return
@@ -2017,7 +1981,7 @@ export class PoolClient {
     private getSrc(): PoolMessageSourceInfo {
         return {
             nodeID: this.nodeID,
-            path: this.nodePosition.Path,
+            path: this.nodePosition.path,
         };
     }
 
@@ -2066,10 +2030,10 @@ export class PoolClient {
 
     private getDistanceTo(lastSeenPath: number[]): number {
         let matches = 0;
-        for (; matches < Math.min(this.nodePosition.Path.length, lastSeenPath.length); matches++) {
-            if (this.nodePosition.Path[matches] != lastSeenPath[matches]) break;
+        for (; matches < Math.min(this.nodePosition.path.length, lastSeenPath.length); matches++) {
+            if (this.nodePosition.path[matches] != lastSeenPath[matches]) break;
         }
-        return (this.nodePosition.Path.length - matches) + (lastSeenPath.length - matches);
+        return (this.nodePosition.path.length - matches) + (lastSeenPath.length - matches);
     }
 }
 

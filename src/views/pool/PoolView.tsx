@@ -1,17 +1,11 @@
-import React, { createRef, LegacyRef, memo, useEffect, useMemo, useRef, useState } from 'react'
+import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { PoolClient } from '../../pool/pool-client';
-import { PoolConnectionState, PoolDevice, PoolFileInfo, PoolInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolNodeState, PoolUser } from '../../pool/pool.model';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { PoolConnectionState, PoolInfo, PoolNode } from '../../pool/pool.model';
 import { getStoreState, GlobalState, store } from '../../store/store';
-import sanitizeHtml from 'sanitize-html';
-import { HTMLMotionProps, motion, MotionProps } from 'framer-motion';
-import { fileSizeToString, mebibytesToBytes } from '../../helpers/file-size';
-import { FileManager, PoolManager } from '../../pool/global';
-import { CircularProgressbar } from 'react-circular-progressbar';
-import { FILE_PICKER_OPTS } from '../../config/file-picker';
-import { formatDate, minutesToMillisecond } from '../../helpers/time';
-import { IndicatorDot } from '../components/IndicatorDot';
+import { motion } from 'framer-motion';
+import { mebibytesToBytes } from '../../helpers/file-size';
+import { PoolManager } from '../../pool/global';
 import { PoolMessagesView } from './PoolMessagesView';
 import { isMobile } from 'react-device-detect';
 
@@ -25,6 +19,7 @@ import DisconnectIcon from '../../assets/disconnect.png';
 import { PoolDisplayView } from './PoolDisplayView';
 import { poolAction } from '../../store/slices/pool.slice';
 import { profileAction } from '../../store/slices/profile.slice';
+import { PoolUserInfo } from '../../sstypes/sync_server.v1';
 
 export enum PoolMessageMode {
     DISCONNECT,
@@ -66,11 +61,11 @@ export function PoolContainerView() {
         store.dispatch(profileAction.setDisplayName(displayName));
         store.dispatch(poolAction.initPools([
         {
-            PoolID: poolID,
-            PoolName: poolID,
-            Users: [],
-            Key: 0,
-            Settings: {
+            poolID: poolID,
+            poolName: poolID,
+            users: [],
+            key: 0,
+            settings: {
                 maxTextLength: 5000,
                 maxMediaSize: mebibytesToBytes(32),
             }
@@ -79,7 +74,7 @@ export function PoolContainerView() {
 
         let pools = getStoreState().pool.pools;
         for (const pool of pools) {
-            if (pool.PoolID == poolID) {
+            if (pool.poolID == poolID) {
                 setPoolKey(pool.key);
                 PoolManager.connectToPool(poolID, poolKey);
                 return;
@@ -98,7 +93,7 @@ export function PoolContainerView() {
 }
 
 export interface PoolUserActiveDevices {
-    user: PoolUser;
+    user: PoolUserInfo;
     activeDevices: Map<String, PoolNode> | undefined;
 }
 
@@ -110,12 +105,12 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
     const userMap = useMemo<UserMapType>(() => {
         if (!pool) return new Map<string, PoolUserActiveDevices>;
         let userMap = new Map<string, PoolUserActiveDevices>;
-        for (const user of pool.Users) {
+        for (const user of pool.users) {
             let userAndDevices: PoolUserActiveDevices = {
                 user: user,
                 activeDevices: undefined,
             };
-            userMap.set(user.UserID, userAndDevices);
+            userMap.set(user.userId, userAndDevices);
         }
         for (const activeNode of pool.activeNodes) {
             let userAndDevices = userMap.get(activeNode.userID);
@@ -127,7 +122,7 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
         }
         //console.log(userMap);
         return userMap;
-    }, [pool?.Users, pool?.activeNodes]);
+    }, [pool?.users, pool?.activeNodes]);
 
     useEffect(() => {
         if (messageMode == PoolMessageMode.DISCONNECT) {
