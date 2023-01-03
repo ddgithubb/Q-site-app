@@ -1,7 +1,7 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE, DEFAULT_RECV_MESSAGES_CACHE } from "../../config/caching";
-import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageInfo, PoolConnectionState, PoolFileInfo, isMediaType, PoolDownloadProgressStatus, PoolMessage, PoolFileOffer, PoolFileOfferAndSeeders } from "../../pool/pool.model";
-import { PoolDeviceInfo, PoolUserInfo } from "../../sstypes/sync_server.v1";
+import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolConnectionState, PoolFileInfo, isMediaType, PoolDownloadProgressStatus, PoolMessage, PoolFileOffer, PoolFileSeeders } from "../../pool/pool.model";
+import { PoolDeviceInfo, PoolUserInfo } from "../../pool/sync_server.v1";
 
 export interface PoolsState {
     pools: Pool[];

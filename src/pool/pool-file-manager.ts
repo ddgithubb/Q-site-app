@@ -4,12 +4,13 @@ import { poolAction, RemoveDownloadAction, UpdateDownloadProgressAction } from "
 import { getStoreState, store } from "../store/store";
 import { FileManager, PoolManager } from "./global";
 import { getCacheChunkNumberFromChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
-import { PoolChunkRange, PoolDownloadProgressStatus, PoolFileInfo, PoolFileRequest, PoolNode } from "./pool.model";
+// import { PoolChunkRange, PoolDownloadProgressStatus, PoolFileInfo, PoolFileRequest, PoolNode } from "./pool.model";
 // @ts-expect-error
 import PoolWorker from 'worker-loader!./pool.worker.js'
 import { CACHE_CHUNK_SIZE, CHUNK_SIZE, CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR } from "../config/caching";
 import { verifyFileHandlePermission } from "../helpers/file-exists";
 import { APP_TYPE } from "../config/env";
+import { PoolFileInfo } from "./pool.v1";
 
 var worker: any = undefined;
 
@@ -18,7 +19,8 @@ if (typeof(Worker) !== "undefined") {
     worker = new WebworkerPromise(new PoolWorker());
 }
 
-export interface FileOfferData extends PoolFileInfo {
+export interface PoolFile {
+    fileInfo: PoolFileInfo;
     file: File;
 }
 
@@ -62,7 +64,7 @@ export class FileManagerClass {
     private fileSystemAccess: boolean;
     private downloadLink?: HTMLAnchorElement;
     private currentFileDownloadSize: number; // size of fileDownloads and fileStore
-    private fileOffers: Map<string, Map<string, FileOfferData>>; // key: PoolID, key: fileID
+    private fileOffers: Map<string, Map<string, PoolFile>>; // key: PoolID, key: fileID
     private fileDownloads: Map<string, FileDownload>; // key: fileID
     private fileDownloadTimer: NodeJS.Timer | undefined;
     private fileCacheChunks: Map<string, CacheChunk>; // key: fileID
@@ -85,7 +87,7 @@ export class FileManagerClass {
             this.downloadLink.style.display = 'none';
             document.body.appendChild(this.downloadLink);
         }
-        this.fileOffers = new Map<string, Map<string, FileOfferData>>;
+        this.fileOffers = new Map<string, Map<string, PoolFile>>;
         this.fileDownloads = new Map<string, FileDownload>;
         this.fileDownloadTimer = undefined;
         this.currentFileDownloadSize = 0;
@@ -197,10 +199,10 @@ export class FileManagerClass {
 
     initPoolFileOffers(poolID: string): Promise<void> {
         if (APP_TYPE == 'desktop' || this.fileOffers.has(poolID) || !this.webworkerAccess) return Promise.resolve();
-        return this.webworker.exec('getPoolFileOffers', poolID).then(async (fileOffers: FileOfferData[]) => {
+        return this.webworker.exec('getPoolFileOffers', poolID).then(async (fileOffers: PoolFile[]) => {
             let poolFileOffers = this.fileOffers.get(poolID);
             if (!poolFileOffers) {
-                poolFileOffers = new Map<string, FileOfferData>;
+                poolFileOffers = new Map<string, PoolFile>;
                 this.fileOffers.set(poolID, poolFileOffers);
             }
             //let updatedFileOffers = false;
@@ -228,11 +230,11 @@ export class FileManagerClass {
         if (file.size == 0) return false;
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) {
-            poolFileOffers = new Map<string, FileOfferData>;
+            poolFileOffers = new Map<string, PoolFile>;
             this.fileOffers.set(poolID, poolFileOffers);
         }
         if (!poolFileOffers.has(fileInfo.fileID)) {
-            let fileOffer: FileOfferData = {
+            let fileOffer: PoolFile = {
                 ...fileInfo,
                 file: file,
             };
@@ -254,7 +256,7 @@ export class FileManagerClass {
         return poolFileOffers.has(fileID);
     }
 
-    getFileOffer(poolID: string, fileID: string): FileOfferData | undefined {
+    getFileOffer(poolID: string, fileID: string): PoolFile | undefined {
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) return undefined;
         return poolFileOffers.get(fileID);
@@ -274,7 +276,7 @@ export class FileManagerClass {
         }
     }
 
-    getFileOffers(poolID: string): FileOfferData[] | undefined  {
+    getFileOffers(poolID: string): PoolFile[] | undefined  {
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) return undefined;
         return Array.from(poolFileOffers.values());

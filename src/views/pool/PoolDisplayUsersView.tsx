@@ -9,7 +9,7 @@ import BrowserIcon from '../../assets/browser.png';
 import DesktopIcon from '../../assets/desktop.png';
 import MobilePhoneIcon from '../../assets/mobile-phone.png';
 import { PoolManager } from "../../pool/global";
-import { DeviceType, PoolUserInfo } from "../../sstypes/sync_server.v1";
+import { DeviceType, PoolUserInfo } from "../../pool/sync_server.v1";
 
 
 export interface PoolDisplayUsersViewParams {

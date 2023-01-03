@@ -1,5 +1,5 @@
 // import { SSNodeStatusData, SSReportCodes, SSReportNodeData, SSSDPData, SSStatus, SSMessage, SSAddNodesData, SSRemoveNodeData } from "./sync-server.model";
-import { PoolNodeState, Pool, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageAction, PoolUpdateNodeState, PoolFileRequest, PoolMessageSourceInfo, PoolMessageDestinationInfo, MESSAGE_ID_LENGTH, FILE_ID_LENGTH, PoolMessageInfo, PoolChunkRange, PoolImageOffer, PoolDownloadProgressStatus, PoolRequestMediaHint, PoolMessage, PoolRemoveFileRequest, PoolRetractFileOffer, PoolFileInfo, PoolFileOffer, PoolFileOfferAndSeeders } from "./pool.model";
+// import { PoolNodeState, Pool, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageAction, PoolUpdateNodeState, PoolFileRequest, PoolMessageSourceInfo, PoolMessageDestinationInfo, MESSAGE_ID_LENGTH, FILE_ID_LENGTH, PoolChunkRange, PoolImageOffer, PoolDownloadProgressStatus, PoolRequestMediaHint, PoolMessage, PoolRemoveFileRequest, PoolRetractFileOffer, PoolFileInfo, PoolFileOffer, PoolFileSeeders } from "./pool.model";
 import { getStoreState, store } from "../store/store";
 import { AddActiveNodeAction, AddDownloadAction, AddFileOfferAction, AddMessageAction, PoolAction, poolAction, RemoveActiveNodeAction, RemoveFileOfferAction, RemoveUserAction, ResetPoolAction, UpdateDownloadProgressStatusAction, UpdateUserAction } from "../store/slices/pool.slice";
 import { CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR, CHUNK_SIZE, DEFAULT_RECV_MESSAGES_CACHE, MAXIMUM_GET_LATEST_MESSAGE_LENGTH } from "../config/caching";
@@ -8,13 +8,15 @@ import { createBinaryMessage, parseBinaryMessage, setBinaryMessageDestVisited } 
 import { FileManager, PoolManager } from "./global";
 import { reportNodeDisconnect } from "./sync-server-client";
 import { compactChunkRanges, getCacheChunkNumberFromByteSize, getCacheChunkNumberFromChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
-import { CacheChunkData, CacheChunkMapData, FileOfferData } from "./pool-file-manager";
+import { CacheChunkData, CacheChunkMapData, PoolFile } from "./pool-file-manager";
 import { mebibytesToBytes } from "../helpers/file-size";
 import EventEmitter from "events";
 import { Image } from 'image-js';
 import { checkFileExist } from "../helpers/file-exists";
 import { profileAction, ProfileState } from "../store/slices/profile.slice";
-import { SSMessage_AddNodeData, SSMessage_InitPoolData, SSMessage_RemoveNodeData, SSMessage_RemoveUserData, SSMessage_UpdateUserData } from "../sstypes/sync_server.v1";
+import { SSMessage_AddNodeData, SSMessage_InitPoolData, SSMessage_RemoveNodeData, SSMessage_RemoveUserData, SSMessage_UpdateUserData } from "./sync_server.v1";
+import { PoolFileChunkMessage, PoolFileSeeders, PoolMessage, PoolMessagePackage, PoolMessagePackage_DestinationInfo, PoolMessagePackage_SourceInfo, PoolMessage_FileOfferData, PoolMessage_FileRequestData, PoolMessage_LatestRequestData, PoolMessage_NodeStateData, PoolMessage_Type, PoolNodeState } from "./pool.v1";
+import { MESSAGE_ID_LENGTH, Pool, PoolNode } from "./pool.model";
 
 const MAXIMUM_DC_BUFFER_SIZE = mebibytesToBytes(15);
 const PREVIEW_IMAGE_DIMENSION = 10;
@@ -44,7 +46,8 @@ interface PoolNodeConnection {
     closeEvent: EventEmitter;
 }
 
-interface OngoingFileRequest extends PoolFileRequest {
+interface OngoingFileRequest {
+    fileRequestData: PoolMessage_FileRequestData;
     startChunkNumber: number;
     wrappedAround: boolean;
     nextChunkNumber: number;
@@ -54,10 +57,15 @@ interface OngoingFileRequest extends PoolFileRequest {
 }
 
 interface PoolAvailableFile {
-    fileOfferAndSeeders: PoolFileOfferAndSeeders;
+    fileSeeders: PoolFileSeeders;
     lastRequestedNodeID: string;
     lastProgress: number;
     retryCount: number;
+}
+
+interface PoolMessageInfo {
+    msgID: string;
+    created: number;
 }
 
 enum MessageDirection {
@@ -372,7 +380,7 @@ export class PoolClient {
         this.nodeID = initPoolData.myNode.nodeId;
         this.addNode(initPoolData.myNode);
 
-        let fileOffersData: FileOfferData[] = FileManager.getFileOffers(this.poolID) || [];
+        let fileOffersData: PoolFile[] = FileManager.getFileOffers(this.poolID) || [];
         for (const fileOfferData of fileOffersData) {
             this.addAvailableFileOffer({
                 ...fileOfferData,
@@ -404,14 +412,14 @@ export class PoolClient {
         } as AddActiveNodeAction));
 
         if (addAsMessage) {
-            let updateNodeState: PoolUpdateNodeState = {
-                nodeID: poolNode.nodeID,
-                userID: poolNode.userID,
+            let nodeState: PoolMessage_NodeStateData = {
+                nodeId: poolNode.nodeID,
+                userId: poolNode.userID,
                 state: PoolNodeState.ACTIVE,
             };
-            let msg: PoolMessage = this.createMessage(
-                PoolMessageType.NODE_STATE, 
-                updateNodeState, 
+            let msg: PoolMessage = this.createNewMessage(
+                PoolMessage_Type.NODE_STATE, 
+                nodeState, 
                 this.createNodeStateMsgID(addNodeData.nodeId, addNodeData.timestamp, PoolNodeState.ACTIVE),
             );
             msg.created = addNodeData.timestamp;
@@ -442,15 +450,15 @@ export class PoolClient {
             nodeID: nodeID,
         } as RemoveActiveNodeAction));
 
-        let updateNodeState: PoolUpdateNodeState = {
-            nodeID: nodeID,
-            userID: existingNode.userID,
+        let nodeState: PoolMessage_NodeStateData = {
+            nodeId: nodeID,
+            userId: existingNode.userID,
             state: PoolNodeState.INACTIVE,
         };
 
-        let msg: PoolMessage = this.createMessage(
-            PoolMessageType.NODE_STATE, 
-            updateNodeState, 
+        let msg: PoolMessage = this.createNewMessage(
+            PoolMessage_Type.NODE_STATE, 
+            nodeState, 
             this.createNodeStateMsgID(nodeID, removeNodeData.timestamp, PoolNodeState.INACTIVE),
         );
         msg.created = removeNodeData.timestamp;
@@ -481,36 +489,44 @@ export class PoolClient {
     // Send to pool functions
     ////////////////////////////////////////////////////////////////
 
-    sendGetLatest(nodeID: string) {
+    sendLatestRequest(nodeID: string) {
         let pool = this.getPool();
         let lastMessageID: string = "";
-        let messages: PoolMessage[] = [];
+        let missedMessages: PoolMessage[] = [];
         if (!this.new) {
             for (let i = pool.messages.length - 1; i >= 0; i--) {
                 if (pool.messages[i].received != undefined && pool.messages[i].received! < this.lastPromoted) {
                     lastMessageID = pool.messages[i].msgID; 
                     break;
                 } else {
-                    messages.push(pool.messages[i]);
+                    missedMessages.push(pool.messages[i]);
                 }
             }
         }
-        let myFileOffers: PoolFileOfferAndSeeders[] = [];
-        if (this.new || this.isOnlyNode) {
-            let fileOffersData: FileOfferData[] = FileManager.getFileOffers(this.poolID) || [];
-            for (const fileOfferData of fileOffersData) {
-                myFileOffers.push({
-                    ...fileOfferData,
-                    seederNodeIDs: [this.nodeID],
+        let initFileOffers: PoolMessage_FileOfferData[] = [];
+        if (this.new) {
+            let files: PoolFile[] = FileManager.getFileOffers(this.poolID) || [];
+            for (const file of files) {
+                initFileOffers.push({
+                    fileInfo: file.fileInfo,
+                    seederNodeId: this.nodeID,
                 });
             }
         }
-        this.sendDataChannel(nodeID, JSON.stringify(this.createMessagePackage(PoolMessageType.GET_LATEST, PoolMessageAction.REQUEST, {
+        let latestRequestData: PoolMessage_LatestRequestData = {
             messagesOnly: this.new ? false : true,
-            lastMessageID: lastMessageID,
-            messages: lastMessageID != "" ? messages : [],
-            fileOffersAndSeeders: myFileOffers,
-        } as PoolUpdateLatestInfo, nodeID)));
+            lastMessageId: lastMessageID,
+            missedMessages: missedMessages,
+            initFileOffers: initFileOffers,
+        }
+        this.sendDataChannel(nodeID, JSON.stringify(
+            this.createMessagePackage(
+                PoolMessageType.GET_LATEST, 
+                PoolMessageAction.REQUEST, 
+                latestRequestData, 
+                nodeID
+            )
+        ));
     }
 
     sendRespondGetLatest(nodeID: string, latestRequest: PoolUpdateLatestInfo) {
@@ -522,19 +538,19 @@ export class PoolClient {
             this.addMessages(latestRequest.messages);
         }
 
-        for (const fileOfferAndSeeders of latestRequest.fileOffersAndSeeders) {
+        for (const fileOfferAndSeeders of latestRequest.fileSeeders) {
             this.addAvailableFileOfferAndSeeders(fileOfferAndSeeders);
         }
 
-        let fileOffersAndSeeders: PoolFileOfferAndSeeders[] = [];
+        let fileOffersAndSeeders: PoolFileSeeders[] = [];
         this.availableFiles.forEach((availFile) => {
-            fileOffersAndSeeders.push(availFile.fileOfferAndSeeders);
+            fileOffersAndSeeders.push(availFile.fileSeeders);
         });
 
         let latest: PoolUpdateLatestInfo = {
             messagesOnly: messagesOnly,
             lastMessageID: lastMessageID,
-            fileOffersAndSeeders: fileOffersAndSeeders,
+            fileSeeders: fileOffersAndSeeders,
             messages: [],
         }
         
@@ -636,7 +652,7 @@ export class PoolClient {
         //console.log(availableFile, fileInfo.fileID);
         let requestNodeID = "";
         if (availableFile) {
-            let seederNodeIDs = availableFile.fileOfferAndSeeders.seederNodeIDs;
+            let seederNodeIDs = availableFile.fileSeeders.seederNodeIDs;
             if (seederNodeIDs.length == 1) {
                 requestNodeID = seederNodeIDs[0];
             } else {
@@ -985,7 +1001,7 @@ export class PoolClient {
     }
 
     sendMedia(fileID: string) {
-        let fileOfferData: FileOfferData | undefined = FileManager.getFileOffer(this.poolID, fileID);
+        let fileOfferData: PoolFile | undefined = FileManager.getFileOffer(this.poolID, fileID);
         if (!fileOfferData) return;
 
         let chunkNumber = 0;
@@ -1096,7 +1112,7 @@ export class PoolClient {
         if (!this.availableFiles.has(poolFileRequest.fileID)) return;
         if (partnerIntPath != this.nodePosition.partnerInt && poolFileRequest.requestingNodeID != this.nodeID) return;
         if (FileManager.hasMediaCache(poolFileRequest.fileID)) {
-            let totalSize = this.availableFiles.get(poolFileRequest.fileID)!.fileOfferAndSeeders.totalSize;
+            let totalSize = this.availableFiles.get(poolFileRequest.fileID)!.fileSeeders.totalSize;
             console.log(getCacheChunkNumberFromByteSize(totalSize));
             for (let i = 0; i <= getCacheChunkNumberFromByteSize(totalSize); i++) {
                 if (i % 3 != partnerIntPath) {
@@ -1146,7 +1162,7 @@ export class PoolClient {
         console.log("ADDING AVAILABLE FILE", fileOffer.fileID);
         if (!availableFile) {
             availableFile = {
-                fileOfferAndSeeders: {
+                fileSeeders: {
                     fileID: fileOffer.fileID,
                     originNodeID: fileOffer.originNodeID,
                     fileName: fileOffer.fileName,
@@ -1161,8 +1177,8 @@ export class PoolClient {
             //console.log("SETTING AVAILABLE FILE", this.availableFiles.size);
         }
         //console.log(availableFile.fileOfferAndSeeders.seederNodeIDs.length, availableFile.fileOfferAndSeeders.seederNodeIDs.includes(fileOffer.seederNodeID), fileOffer.seederNodeID)
-        if (!availableFile.fileOfferAndSeeders.seederNodeIDs.includes(fileOffer.seederNodeID)) {
-            availableFile.fileOfferAndSeeders.seederNodeIDs.push(fileOffer.seederNodeID);
+        if (!availableFile.fileSeeders.seederNodeIDs.includes(fileOffer.seederNodeID)) {
+            availableFile.fileSeeders.seederNodeIDs.push(fileOffer.seederNodeID);
             store.dispatch(poolAction.addFileOffer({
                 key: this.poolKey,
                 fileOffer: fileOffer,
@@ -1171,7 +1187,7 @@ export class PoolClient {
         }
     }
 
-    addAvailableFileOfferAndSeeders(fileOfferAndSeeders: PoolFileOfferAndSeeders) {
+    addAvailableFileOfferAndSeeders(fileOfferAndSeeders: PoolFileSeeders) {
         for (const seederNodeID of fileOfferAndSeeders.seederNodeIDs) {
             let fileOffer: PoolFileOffer = {
                 seederNodeID: seederNodeID,
@@ -1187,7 +1203,7 @@ export class PoolClient {
     removeAvailableFileOffer(fileID: string, nodeID: string) {
         let availableFile = this.availableFiles.get(fileID);
         if (!availableFile) return;
-        let seederNodeIDs = availableFile.fileOfferAndSeeders.seederNodeIDs;
+        let seederNodeIDs = availableFile.fileSeeders.seederNodeIDs;
         for (let i = 0; i < seederNodeIDs.length; i++) {
             if (seederNodeIDs[i] == nodeID) {
                 seederNodeIDs.splice(i, 1);
@@ -1221,7 +1237,7 @@ export class PoolClient {
         if (!updateLatestInfo.messagesOnly) {
             store.dispatch(poolAction.clearFileOffers({ key: this.poolKey } as PoolAction));
             this.availableFiles.clear();
-            for (const fileOfferAndSeeders of updateLatestInfo.fileOffersAndSeeders) {
+            for (const fileOfferAndSeeders of updateLatestInfo.fileSeeders) {
                 for (const seederNodeID of fileOfferAndSeeders.seederNodeIDs) {
                     let fileOffer: PoolFileOffer = {
                         ...fileOfferAndSeeders,
@@ -1360,7 +1376,7 @@ export class PoolClient {
         //let { payload, fileID, chunkNumber, src, dests } = parsedMsg;
 
         if (parsedMsg.payload.byteLength == 0) return;
-        let fileSize = this.availableFiles.get(parsedMsg.fileID)?.fileOfferAndSeeders.totalSize;
+        let fileSize = this.availableFiles.get(parsedMsg.fileID)?.fileSeeders.totalSize;
 
         // 1 step/8mb buffer: 46,272ms
         // 3 steps/8mb buffer/1.6mb cache chunk: 82,475ms
@@ -1659,7 +1675,7 @@ export class PoolClient {
         nodeConnection.dataChannel.onopen = () => {
             console.log("DATA CHANNEL WITH", targetNodeID, "OPENED");
             if (this.new) {
-                this.sendGetLatest(targetNodeID);
+                this.sendLatestRequest(targetNodeID);
             } else if (sentOffer) {
                 let isNeighbourNode = false
                 for (let i = 0; i < 3; i++) {
@@ -1669,7 +1685,7 @@ export class PoolClient {
                     }
                 }
                 if (isNeighbourNode) {
-                    this.sendGetLatest(targetNodeID);
+                    this.sendLatestRequest(targetNodeID);
                 }
             }
             this.flushDCBufferQueue(nodeConnection);
@@ -1978,21 +1994,21 @@ export class PoolClient {
         return false;
     }
 
-    private getSrc(): PoolMessageSourceInfo {
+    private getSrc(): PoolMessagePackage_SourceInfo {
         return {
-            nodeID: this.nodeID,
+            nodeId: this.nodeID,
             path: this.nodePosition.path,
         };
     }
 
-    private getDests(destNodeIDs: string[] | string): PoolMessageDestinationInfo[] {
+    private getDests(destNodeIDs: string[] | string): PoolMessagePackage_DestinationInfo[] {
         if (typeof destNodeIDs == 'string') {
             destNodeIDs = [destNodeIDs];
         }
-        let dests: PoolMessageDestinationInfo[] = [];
+        let dests: PoolMessagePackage_DestinationInfo[] = [];
         for (let i = 0; i < destNodeIDs.length; i++) {
-            let dest: PoolMessageDestinationInfo = {
-                nodeID: destNodeIDs[i],
+            let dest: PoolMessagePackage_DestinationInfo = {
+                nodeId: destNodeIDs[i],
                 visited: false,
             };
             dests.push(dest);
@@ -2000,28 +2016,37 @@ export class PoolClient {
         return dests;
     }
 
-    private createMessage(type: PoolMessageType, data?: any, msgID: string = nanoid(MESSAGE_ID_LENGTH)) {
+    private createNewMessage(type: PoolMessage_Type, msgID: string = nanoid(MESSAGE_ID_LENGTH)) {
         let msg: PoolMessage = {
-            msgID,
+            msgId: msgID,
             type,
+            userId: getStoreState().profile.userID,
             created: Date.now(),
-            userID: getStoreState().profile.userID,
-            data,
         }
         return msg;
     }
 
-    private createMessagePackage(type: PoolMessageType, action: PoolMessageAction, data?: any, destNodeIDs?: string[] | string, partnerIntPath: number | null = null): PoolMessagePackage {
+    private createNewMessagePackage(destNodeIDs?: string[] | string, partnerIntPath: number | undefined = undefined): PoolMessagePackage {
         let src = this.getSrc();
-        let dests = destNodeIDs ? this.getDests(destNodeIDs) : undefined;
+        let dests = destNodeIDs ? this.getDests(destNodeIDs) : [];
         let messagePackage: PoolMessagePackage = {
             src,
             dests,
-            action,
             partnerIntPath,
-            msg: this.createMessage(type, data),
         }
         return messagePackage;
+    }
+
+    private createMessagePackage(msg: PoolMessage, destNodeIDs?: string[] | string, partnerIntPath: number | undefined = undefined) {
+        let msgPkg: PoolMessagePackage = this.createNewMessagePackage(destNodeIDs, partnerIntPath);
+        msgPkg.msg = msg;
+        return msgPkg;
+    }
+
+    private createFileChunkMessagePackage(fileChunkMsg: PoolFileChunkMessage, destNodeIDs?: string[] | string, partnerIntPath: number | undefined = undefined) {
+        let msgPkg: PoolMessagePackage = this.createNewMessagePackage(destNodeIDs, partnerIntPath);
+        msgPkg.fileChunkMsg = fileChunkMsg;
+        return msgPkg;
     }
 
     ////////////////////////////////////////////////////////////////

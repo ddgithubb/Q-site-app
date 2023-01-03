@@ -19,7 +19,7 @@ import DisconnectIcon from '../../assets/disconnect.png';
 import { PoolDisplayView } from './PoolDisplayView';
 import { poolAction } from '../../store/slices/pool.slice';
 import { profileAction } from '../../store/slices/profile.slice';
-import { PoolUserInfo } from '../../sstypes/sync_server.v1';
+import { PoolUserInfo } from '../../pool/sync_server.v1';
 
 export enum PoolMessageMode {
     DISCONNECT,
