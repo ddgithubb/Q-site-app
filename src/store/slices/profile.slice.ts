@@ -1,6 +1,6 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE } from "../../config/caching";
-import { DeviceType, PoolDeviceInfo } from "../../sstypes/sync_server.v1";
+import { DeviceType, PoolDeviceInfo } from "../../pool/sync_server.v1";
 
 export interface ProfileState {
     userID: string;

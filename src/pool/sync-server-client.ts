@@ -1,5 +1,5 @@
 import { SYNC_SERVER_CONNECT_ENDPOINT, HEARTBEAT_TIMEOUT_SECONDS, HEARTBEAT_INTERVAL_SECONDS } from "../config/http";
-import { SSMessage, SSMessage_Op, SSMessage_ReportCode } from "../sstypes/sync_server.v1";
+import { SSMessage, SSMessage_Op, SSMessage_ReportCode } from "./sync_server.v1";
 import { poolAction, UpdateConnectionStateAction } from "../store/slices/pool.slice";
 import { getStoreState, store } from "../store/store";
 import { validateSSState } from "../views/static/MaintenancePage";

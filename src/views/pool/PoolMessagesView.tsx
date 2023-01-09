@@ -1,14 +1,15 @@
 import { useState, useRef, useMemo, useEffect, memo } from 'react';
 import sanitizeHtml from 'sanitize-html';
-import { fileSizeToString } from '../../helpers/file-size';
-import { formatDate, formatTime, minutesToMillisecond } from '../../helpers/time';
+import { fileSizeToString } from '../../utils/file-size';
+import { formatDate, formatTime, minutesToMillisecond } from '../../utils/time';
 import { FileManager, PoolManager } from '../../pool/global';
-import { PoolFileInfo, PoolMessageType, PoolMessage, PoolNodeState, PoolUpdateNodeState, PoolFileOffer, PoolImageOffer } from '../../pool/pool.model';
+// import { PoolFileInfo, PoolMessageType, PoolMessage, PoolNodeState, PoolUpdateNodeState, PoolFileOffer, PoolImageOffer } from '../../pool/pool.model';
 import './PoolMessagesView.css';
 
 import DownloadIcon from '../../assets/download.png';
 import FileIcon from '../../assets/file.png';
 import { UserMapType } from './PoolView';
+import { PoolMessage, PoolFileInfo, PoolNodeState, PoolFileOffer, PoolMessage_Type, PoolMessage_NodeStateData, PoolMediaType, PoolImageData } from '../../pool/pool.v1';
 
 const CONSISTENT_MESSAGE_INTERVAL: number = minutesToMillisecond(5);
 const MIN_MESSAGE_HEIGHT: number = 28;
@@ -125,12 +126,12 @@ function PoolMessagesViewComponent({ poolID, messages, userMap, downloadQueue }:
     }
 
     const requestFile = (fileInfo: PoolFileInfo) => {
-        PoolManager.sendRequestFileToPool(poolID, fileInfo);
+        PoolManager.sendFileRequestToPool(poolID, fileInfo);
     }
 
     const requestImage = (fileInfo: PoolFileInfo) => {
-        if (FileManager.hasFileDownload(fileInfo.fileID)) return;
-        PoolManager.sendRequestFileToPool(poolID, fileInfo, true);
+        if (FileManager.hasFileDownload(fileInfo.fileId)) return;
+        PoolManager.sendFileRequestToPool(poolID, fileInfo, true);
     }
 
     return (
@@ -143,72 +144,86 @@ function PoolMessagesViewComponent({ poolID, messages, userMap, downloadQueue }:
                     let messageContentElement: JSX.Element = <></>;
 
                     switch (msg.type) {
-                        case PoolMessageType.NODE_STATE:
-                            let nodeState: PoolUpdateNodeState = msg.data;
+                        case PoolMessage_Type.NODE_STATE:
+                            if (!msg.nodeStateData) return;
+                            let nodeState: PoolMessage_NodeStateData = msg.nodeStateData;
                             messageContentElement = 
-                                <NodeStateComponent displayName={userMap.get(nodeState.userID)?.user.displayName} nodeState={nodeState} />;
+                                <NodeStateComponent displayName={userMap.get(nodeState.userId)?.user.displayName} nodeState={nodeState} />;
                             break;
-                        case PoolMessageType.TEXT:
-                            let text: string = msg.data;
+                        case PoolMessage_Type.TEXT:
+                            if (!msg.textData) return;
+                            let text: string = msg.textData.text;
                             messageContentElement = 
                                 <div className="pool-message-text" dangerouslySetInnerHTML={{ __html: sanitizeHtml(text, { allowedTags: [ 'br' ] }) }}/>
                             break;
-                        case PoolMessageType.FILE_OFFER:
-                            let fileOffer: PoolFileOffer = msg.data;
+                        case PoolMessage_Type.FILE_OFFER:
+                            if (!msg.fileOfferData?.fileInfo) return;
+                            let fileInfo: PoolFileInfo = msg.fileOfferData.fileInfo;
                             messageContentElement = 
                                 <div className="pool-message-file-data-container">
-                                    <div className="pool-message-file-container elipsify-container" onClick={() => requestFile(fileOffer)}>
+                                    <div className="pool-message-file-container elipsify-container" onClick={() => requestFile(fileInfo)}>
                                         <img src={FileIcon} width={35} height={35} />
-                                        <span className="pool-message-file-name elipsify-content">{fileOffer.fileName}</span>
-                                        <span className="pool-message-file-size elipsify-extra">{fileSizeToString(fileOffer.totalSize)}</span>
+                                        <span className="pool-message-file-name elipsify-content">{fileInfo.fileName}</span>
+                                        <span className="pool-message-file-size elipsify-extra">{fileSizeToString(fileInfo.totalSize)}</span>
                                     </div>
                                 </div>
                             break;
-                        case PoolMessageType.IMAGE_OFFER:
-                            let imageOffer: PoolImageOffer = msg.data;
-                            messageContentElement = 
-                                <>
-                                    <div className="pool-message-image-container">
-                                        <div className="pool-message-image-sub-container">
-                                            <img 
-                                                loading="lazy" 
-                                                className={"pool-message-image" + (!FileManager.hasMediaCache(imageOffer.fileID) ? " pool-message-image-preview-blur" : "")} 
-                                                src={FileManager.getMediaCache(imageOffer.fileID) || imageOffer.previewImage} 
-                                                height={Math.min(400, (imageOffer.height / imageOffer.width) * Math.min(400, imageOffer.width, window.innerWidth - 80))} />
-                                            {
-                                                !FileManager.hasMediaCache(imageOffer.fileID) ? (
-                                                    <div className="pool-message-image-missing-container" onClick={() => requestImage(imageOffer)}>
-                                                        {FileManager.hasFileDownload(imageOffer.fileID) ? "Requesting..." : "Request Image"}
-                                                    </div>
-                                                ) : undefined
-                                            }
-                                        </div>
-                                    </div>
-                                    <div className="pool-message-image-download-container">
-                                        <img className="pool-message-image-download-icon" src={DownloadIcon} />
-                                        <div className="pool-message-image-download-filename" onClick={() => requestFile(imageOffer)}>
-                                            {imageOffer.fileName} {" (" + fileSizeToString(imageOffer.totalSize) + ")"}
-                                        </div>
-                                    </div>
-                                </>
+                        case PoolMessage_Type.MEDIA_OFFER:
+                            if (!msg.mediaOfferData) return;
+                            switch (msg.mediaOfferData.mediaType) {
+                                case PoolMediaType.IMAGE:
+                                    if (!msg.mediaOfferData.imageData || !msg.mediaOfferData.fileOffer?.fileInfo) return;
+                                    let fileInfo: PoolFileInfo = msg.mediaOfferData.fileOffer.fileInfo;
+                                    let imageData: PoolImageData = msg.mediaOfferData.imageData;
+                                    messageContentElement = 
+                                        <>
+                                            <div className="pool-message-image-container">
+                                                <div className="pool-message-image-sub-container">
+                                                    <img 
+                                                        loading="lazy" 
+                                                        className={"pool-message-image" + (!FileManager.hasMediaCache(fileInfo.fileId) ? " pool-message-image-preview-blur" : "")} 
+                                                        src={FileManager.getMediaCache(fileInfo.fileId) || imageData.previewImageBase64} 
+                                                        height={Math.min(400, (imageData.height / imageData.width) * Math.min(400, imageData.width, window.innerWidth - 80))} />
+                                                    {
+                                                        !FileManager.hasMediaCache(fileInfo.fileId) ? (
+                                                            <div className="pool-message-image-missing-container" onClick={() => requestImage(fileInfo)}>
+                                                                {FileManager.hasFileDownload(fileInfo.fileId) ? "Requesting..." : "Request Image"}
+                                                            </div>
+                                                        ) : undefined
+                                                    }
+                                                </div>
+                                            </div>
+                                            <div className="pool-message-image-download-container">
+                                                <img className="pool-message-image-download-icon" src={DownloadIcon} />
+                                                <div className="pool-message-image-download-filename" onClick={() => requestFile(fileInfo)}>
+                                                    {fileInfo.fileName} {" (" + fileSizeToString(fileInfo.totalSize) + ")"}
+                                                </div>
+                                            </div>
+                                        </>
+                                    break;
+                                default:
+                                    return;
+                            }
                             break;
+                        default:
+                            return;
                     }
 
                     let hasHeader = (
                         index == 0 || 
-                        msg.userID != poolMessagesView[index - 1].userID ||  // should be deviceID
+                        msg.userId != poolMessagesView[index - 1].userId ||  // should be deviceID
                         msg.created - poolMessagesView[index - 1].created > CONSISTENT_MESSAGE_INTERVAL ||
-                        (poolMessagesView[index - 1].type != PoolMessageType.TEXT && 
-                        poolMessagesView[index - 1].type != PoolMessageType.FILE_OFFER && 
-                        poolMessagesView[index - 1].type != PoolMessageType.IMAGE_OFFER)
+                        (poolMessagesView[index - 1].type != PoolMessage_Type.TEXT && 
+                        poolMessagesView[index - 1].type != PoolMessage_Type.FILE_OFFER && 
+                        poolMessagesView[index - 1].type != PoolMessage_Type.MEDIA_OFFER)
                     )
-                    && (msg.type == PoolMessageType.TEXT || msg.type == PoolMessageType.FILE_OFFER || msg.type == PoolMessageType.IMAGE_OFFER)
+                    && (msg.type == PoolMessage_Type.TEXT || msg.type == PoolMessage_Type.FILE_OFFER || msg.type == PoolMessage_Type.MEDIA_OFFER)
 
                     return (
-                        <div className={"pool-message-container" + (hasHeader ? " pool-header-spacer" : "")} key={msg.msgID}>
+                        <div className={"pool-message-container" + (hasHeader ? " pool-header-spacer" : "")} key={msg.msgId}>
                             {
                                 hasHeader ? (
-                                    <HeaderComponent displayName={userMap.get(msg.userID)?.user.displayName} msg={msg} />
+                                    <HeaderComponent displayName={userMap.get(msg.userId)?.user.displayName} msg={msg} />
                                 ) : (
                                     <div className="pool-message-date pool-message-portable-date">{formatTime(msg.created)}</div>
                                 )
@@ -226,7 +241,7 @@ function PoolMessagesViewComponent({ poolID, messages, userMap, downloadQueue }:
 const HeaderComponent = memo(({ displayName, msg }: { displayName: string | undefined, msg: PoolMessage}) => (
     <div className="pool-message-info-bar elipsify-container">
         <div className="pool-message-name elipsify-content">
-            {displayName || msg.userID}
+            {displayName || msg.userId}
         </div>
         <div className="pool-message-date elipsify-extra">
             {formatDate(msg.created)}
@@ -236,9 +251,9 @@ const HeaderComponent = memo(({ displayName, msg }: { displayName: string | unde
     return !next.displayName || prev.displayName == next.displayName
 });
 
-const NodeStateComponent = memo(({ displayName, nodeState }: { displayName: string | undefined, nodeState: PoolUpdateNodeState }) => (
+const NodeStateComponent = memo(({ displayName, nodeState }: { displayName: string | undefined, nodeState: PoolMessage_NodeStateData }) => (
     <div className="pool-message-node-status">
-        {displayName} {"(" + nodeState.nodeID + ")"} has {nodeState.state == PoolNodeState.ACTIVE ? "joined" : "left"}
+        {displayName} {"(" + nodeState.nodeId + ")"} has {nodeState.state == PoolNodeState.ACTIVE ? "joined" : "left"}
     </div>
 ), (prev, next) => {
     return !next.displayName || prev.displayName == next.displayName;

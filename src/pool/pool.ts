@@ -1,9 +1,11 @@
 import { PoolClient } from "./pool-client";
-import { FILE_ID_LENGTH, Pool, PoolChunkRange, PoolConnectionState, PoolFileInfo, PoolFileOffer, PoolImageOffer, PoolMessageDestinationInfo } from "./pool.model";
+// import { FILE_ID_LENGTH, Pool, PoolChunkRange, PoolConnectionState, PoolFileInfo, PoolFileOffer, PoolImageOffer, PoolMessageDestinationInfo } from "./pool.model";
 import { store } from "../store/store";
 import { poolAction, UpdateConnectionStateAction } from "../store/slices/pool.slice";
 import { initializePool } from "./sync-server-client";
 import { FileManager } from "./global";
+import { PoolConnectionState } from "./pool.model";
+import { PoolFileInfo, PoolChunkRange, PoolFileOffer } from "./pool.v1";
 
 export class PoolManagerClass {
     private connectedPools: Map<string, PoolClient>;
@@ -63,10 +65,10 @@ export class PoolManagerClass {
         return true;
     }
 
-    sendRequestFileToPool(poolID: string, fileInfo: PoolFileInfo, isMedia: boolean = false, chunksMissing?: PoolChunkRange[]): boolean {
+    sendFileRequestToPool(poolID: string, fileInfo: PoolFileInfo, isMedia: boolean = false, chunksMissing?: PoolChunkRange[]): boolean {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
-        poolClient.sendRequestFile(fileInfo, isMedia, chunksMissing);
+        poolClient.sendFileRequest(fileInfo, isMedia, chunksMissing);
         return true;
     }
     
@@ -77,17 +79,10 @@ export class PoolManagerClass {
         return true;
     }
 
-    sendRemoveFileRequest(poolID: string, fileOffer: PoolFileOffer): boolean {
+    sendRetractFileRequest(poolID: string, fileOffer: PoolFileOffer): boolean {
         let poolClient = this.connectedPools.get(poolID);
         if (!poolClient) return false;
-        poolClient.sendRemoveFileRequest(fileOffer);
-        return true;
-    }
-
-    completeFileDownload(poolID: string, fileID: string): boolean {
-        let poolClient = this.connectedPools.get(poolID);
-        if (!poolClient) return false;
-        poolClient.completeFileDownload(fileID);
+        poolClient.sendRetractFileRequest(fileOffer);
         return true;
     }
 

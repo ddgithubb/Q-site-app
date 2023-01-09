@@ -1,5 +1,5 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
-import { gibibytesToBytes, mebibytesToBytes } from "../../helpers/file-size";
+import { gibibytesToBytes, mebibytesToBytes } from "../../utils/file-size";
 
 export interface SettingState {
     storageSettings: StorageSettings;

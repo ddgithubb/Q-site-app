@@ -1,15 +1,17 @@
 import { nanoid } from "nanoid";
-import { fileSizeToString, kibibytesToBytes, mebibytesToBytes } from "../helpers/file-size";
-import { poolAction, RemoveDownloadAction, UpdateDownloadProgressAction } from "../store/slices/pool.slice";
+import { fileSizeToString, kibibytesToBytes, mebibytesToBytes } from "../utils/file-size";
+import { AddDownloadAction, poolAction, RemoveDownloadAction } from "../store/slices/pool.slice";
 import { getStoreState, store } from "../store/store";
 import { FileManager, PoolManager } from "./global";
-import { getCacheChunkNumberFromChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
-import { PoolChunkRange, PoolDownloadProgressStatus, PoolFileInfo, PoolFileRequest, PoolNode } from "./pool.model";
+import { addToChunkRanges, compactChunkRanges, deleteCacheChunkFromChunkRanges, existsInChunkRanges, getCacheChunkNumberFromChunkNumber, inChunkRange } from "./pool-chunks";
+// import { PoolChunkRange, PoolDownloadProgressStatus, PoolFileInfo, PoolFileRequest, PoolNode } from "./pool.model";
 // @ts-expect-error
 import PoolWorker from 'worker-loader!./pool.worker.js'
 import { CACHE_CHUNK_SIZE, CHUNK_SIZE, CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR } from "../config/caching";
-import { verifyFileHandlePermission } from "../helpers/file-exists";
+import { verifyFileHandlePermission } from "../utils/file-exists";
 import { APP_TYPE } from "../config/env";
+import { PoolChunkRange, PoolFileInfo } from "./pool.v1";
+import { Pool, PoolDownloadProgressStatus } from "./pool.model";
 
 var worker: any = undefined;
 
@@ -18,7 +20,8 @@ if (typeof(Worker) !== "undefined") {
     worker = new WebworkerPromise(new PoolWorker());
 }
 
-export interface FileOfferData extends PoolFileInfo {
+export interface PoolFile {
+    fileInfo: PoolFileInfo;
     file: File;
 }
 
@@ -27,12 +30,15 @@ interface FileDownload {
     poolKey: number;
     fileInfo: PoolFileInfo;
     lastModified: number;
-    // lastProgress: number;
     status: PoolDownloadProgressStatus;
     totalChunks: number;
     chunksDownloaded: number;
     chunksDownloadedMap: boolean[];
     isMedia: boolean;
+    lastRequestedNodeID: string;
+    lastProgress: number;
+    retryCount: number;
+    hinterNodeIDs?: string[];
     directoryHandle?: FileSystemDirectoryHandle;
     fileHandle?: FileSystemFileHandle;
     fileStream?: FileSystemWritableFileStream;
@@ -43,7 +49,7 @@ interface CacheChunk {
     lastModified: number;
     cacheChunkNumber: number;
     chunkRange: PoolChunkRange;
-    chunks: ArrayBuffer[];
+    chunks: Uint8Array[];
 }
 
 interface MediaCacheInfo {
@@ -51,24 +57,29 @@ interface MediaCacheInfo {
     size: number;
 }
 
-export type CacheChunkMapData = CacheChunkData[];
+// export type CacheChunkMapData = CacheChunkData[];
 
+// Implement LRU cache on desktop version!
 export interface CacheChunkData {
-    key: string;
-    cacheChunkNumber: number;
+    key: string; // key is only for browser
+    // keys for desktop are just fileID and cacheChunkNumber which
+    // if have CacheChunkData info, would already know fileID and cacheChunkNumber
+
+    // offset for desktop
+    chunkRanges: PoolChunkRange[];
 }
 
 export class FileManagerClass {
     private fileSystemAccess: boolean;
     private downloadLink?: HTMLAnchorElement;
     private currentFileDownloadSize: number; // size of fileDownloads and fileStore
-    private fileOffers: Map<string, Map<string, FileOfferData>>; // key: PoolID, key: fileID
+    private fileOffers: Map<string, Map<string, PoolFile>>; // key: PoolID, key: fileID
     private fileDownloads: Map<string, FileDownload>; // key: fileID
     private fileDownloadTimer: NodeJS.Timer | undefined;
     private fileCacheChunks: Map<string, CacheChunk>; // key: fileID
-    private cacheChunkMapDataFlushTimer: NodeJS.Timer | undefined;
+    private cacheChunkFlushTimer: NodeJS.Timer | undefined;
     private cacheChunkQueue: string[]; // value: cache key
-    private cacheChunkMap: Map<string, CacheChunkMapData>; // key: fileID
+    private cacheChunkMap: Map<string, Map<number, CacheChunkData>>; // key: fileID, // subkey: cacheChunkNumber
     private maxCacheChunkCount: number;
     private mediaCacheObjectURL: Map<string, string>; // key: fileID
     private mediaCacheQueue: MediaCacheInfo[];
@@ -85,16 +96,16 @@ export class FileManagerClass {
             this.downloadLink.style.display = 'none';
             document.body.appendChild(this.downloadLink);
         }
-        this.fileOffers = new Map<string, Map<string, FileOfferData>>;
-        this.fileDownloads = new Map<string, FileDownload>;
+        this.fileOffers = new Map<string, Map<string, PoolFile>>();
+        this.fileDownloads = new Map<string, FileDownload>();
         this.fileDownloadTimer = undefined;
         this.currentFileDownloadSize = 0;
-        this.fileCacheChunks = new Map<string, CacheChunk>;
-        this.cacheChunkMapDataFlushTimer = undefined;
+        this.fileCacheChunks = new Map<string, CacheChunk>();
+        this.cacheChunkFlushTimer = undefined;
         this.cacheChunkQueue = [];
-        this.cacheChunkMap = new Map<string, CacheChunkMapData>;
+        this.cacheChunkMap = new Map<string, Map<number, CacheChunkData>>();
         this.maxCacheChunkCount = store.getState().setting.storageSettings.maxCacheChunkSize / CACHE_CHUNK_SIZE;
-        this.mediaCacheObjectURL = new Map<string, string>;
+        this.mediaCacheObjectURL = new Map<string, string>();
         this.mediaCacheQueue = [];
         this.curMediaCacheSize = 0;
         this.maxMediaCacheSize = store.getState().setting.storageSettings.maxMediaCacheSize;
@@ -119,11 +130,11 @@ export class FileManagerClass {
     }
 
     private startCacheChunksFlushTimer() {
-        if (this.cacheChunkMapDataFlushTimer) return;
-        this.cacheChunkMapDataFlushTimer = setInterval(() => {
+        if (this.cacheChunkFlushTimer) return;
+        this.cacheChunkFlushTimer = setInterval(() => {
             if (this.fileCacheChunks.size == 0) {
-                clearInterval(this.cacheChunkMapDataFlushTimer);
-                this.cacheChunkMapDataFlushTimer = undefined;
+                clearInterval(this.cacheChunkFlushTimer);
+                this.cacheChunkFlushTimer = undefined;
                 return;
             }
             this.fileCacheChunks.forEach((cacheChunk, key) => {
@@ -147,18 +158,24 @@ export class FileManagerClass {
                 // if (fileDownload.chunksDownloaded == 0) return;
                 if (Date.now() >= fileDownload.lastModified + 5000) {
                     console.log("5 SECONDS NO CHUNKS INTERVAL")
-                    let chunksMissing: number[][] = [];
-                    let curRange: number[] | undefined = undefined;
+                    let chunksMissing: PoolChunkRange[] = [];
+                    let curRange: PoolChunkRange | undefined = undefined;
                     for (let i = 0; i < fileDownload.chunksDownloadedMap.length; i++) {
                         if (!fileDownload.chunksDownloadedMap[i]) {
                             if (!curRange) {
-                                curRange = [i, i];
+                                curRange = {
+                                    start: i,
+                                    end: i,
+                                };
                                 chunksMissing.push(curRange);
                             } else {
-                                if (i - 1 == curRange[1]) {
-                                    curRange[1] = i;
+                                if (i - 1 == curRange.end) {
+                                    curRange.end = i;
                                 } else {
-                                    curRange = [i, i];
+                                    curRange = {
+                                        start: i,
+                                        end: i,
+                                    };
                                     chunksMissing.push(curRange);
                                 }
                             }
@@ -166,7 +183,7 @@ export class FileManagerClass {
                     }
                     if (chunksMissing.length != 0) {
                         //console.log("CHUNKS MISSING:", chunksMissing);
-                        PoolManager.sendRequestFileToPool(fileDownload.poolID, fileDownload.fileInfo, fileDownload.isMedia, chunksMissing);
+                        PoolManager.sendFileRequestToPool(fileDownload.poolID, fileDownload.fileInfo, fileDownload.isMedia, chunksMissing);
                     }
                 }
             });
@@ -197,10 +214,10 @@ export class FileManagerClass {
 
     initPoolFileOffers(poolID: string): Promise<void> {
         if (APP_TYPE == 'desktop' || this.fileOffers.has(poolID) || !this.webworkerAccess) return Promise.resolve();
-        return this.webworker.exec('getPoolFileOffers', poolID).then(async (fileOffers: FileOfferData[]) => {
+        return this.webworker.exec('getPoolFileOffers', poolID).then(async (fileOffers: PoolFile[]) => {
             let poolFileOffers = this.fileOffers.get(poolID);
             if (!poolFileOffers) {
-                poolFileOffers = new Map<string, FileOfferData>;
+                poolFileOffers = new Map<string, PoolFile>();
                 this.fileOffers.set(poolID, poolFileOffers);
             }
             //let updatedFileOffers = false;
@@ -212,7 +229,7 @@ export class FileManagerClass {
                 //     updatedFileOffers = true;
                 //     continue;
                 // }
-                poolFileOffers.set(fileOffers[i].fileID, fileOffers[i]);
+                poolFileOffers.set(fileOffers[i].fileInfo.fileId, fileOffers[i]);
             }
             // if (updatedFileOffers) {
             //     this.webworker.exec('updatePoolFileOffer', {
@@ -228,19 +245,19 @@ export class FileManagerClass {
         if (file.size == 0) return false;
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) {
-            poolFileOffers = new Map<string, FileOfferData>;
+            poolFileOffers = new Map<string, PoolFile>();
             this.fileOffers.set(poolID, poolFileOffers);
         }
-        if (!poolFileOffers.has(fileInfo.fileID)) {
-            let fileOffer: FileOfferData = {
-                ...fileInfo,
+        if (!poolFileOffers.has(fileInfo.fileId)) {
+            let poolFile: PoolFile = {
+                fileInfo,
                 file: file,
             };
-            poolFileOffers.set(fileInfo.fileID, fileOffer);
+            poolFileOffers.set(fileInfo.fileId, poolFile);
             if (APP_TYPE == 'desktop' && this.webworkerAccess) {
                 this.webworker.exec('addPoolFileOffer', {
                     poolID: poolID,
-                    fileOffer: fileOffer,
+                    fileOffer: poolFile,
                 });
             }
             return true;
@@ -254,7 +271,7 @@ export class FileManagerClass {
         return poolFileOffers.has(fileID);
     }
 
-    getFileOffer(poolID: string, fileID: string): FileOfferData | undefined {
+    getFileOffer(poolID: string, fileID: string): PoolFile | undefined {
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) return undefined;
         return poolFileOffers.get(fileID);
@@ -274,37 +291,15 @@ export class FileManagerClass {
         }
     }
 
-    getFileOffers(poolID: string): FileOfferData[] | undefined  {
+    getFileOffers(poolID: string): PoolFile[] | undefined  {
         let poolFileOffers = this.fileOffers.get(poolID);
         if (!poolFileOffers) return undefined;
         return Array.from(poolFileOffers.values());
     }
 
-    getFileDownloadProgress(fileID: string): number {
-        let fileDownload = this.fileDownloads.get(fileID);
-        if (!fileDownload) return 0;
-        return Math.trunc((fileDownload.chunksDownloaded / fileDownload.totalChunks) * 100);
-    }
-
-    hasFileDownload(fileID: string) {
-        return this.fileDownloads.has(fileID);
-    }
-
-    getFileDownloadStatus(fileID: string): PoolDownloadProgressStatus {
-        let fileDownload = this.fileDownloads.get(fileID);
-        if (!fileDownload) return PoolDownloadProgressStatus.UNAVAILABLE;
-        return fileDownload.status;
-    }
-
-    setFileDownloadStatus(fileID: string, status: PoolDownloadProgressStatus) {
-        let fileDownload = this.fileDownloads.get(fileID);
-        if (!fileDownload) return;
-        fileDownload.status = status;
-    }
-
     async addFileDownload(poolID: string, poolKey: number, fileInfo: PoolFileInfo, isMedia: boolean): Promise<boolean> {
         if (!this.checkFileSizeLimit(fileInfo.totalSize)) return false;
-        if (this.fileDownloads.has(fileInfo.fileID)) return true;
+        if (this.fileDownloads.has(fileInfo.fileId)) return true;
         let directoryHandle = undefined;
         let fileHandle = undefined;
         let fileStream = undefined;
@@ -330,58 +325,87 @@ export class FileManagerClass {
         let chunksDownloadedMap = [];
         let totalChunks = Math.ceil(fileInfo.totalSize / CHUNK_SIZE);
         chunksDownloadedMap[totalChunks - 1] = false;
-        this.fileDownloads.set(fileInfo.fileID, {
+        let fileDownload: FileDownload = {
             poolID: poolID,
             poolKey: poolKey,
             fileInfo: fileInfo,
             lastModified: Date.now(),
+            status: PoolDownloadProgressStatus.DOWNLOADING,
             totalChunks: totalChunks,
             chunksDownloaded: 0,
             chunksDownloadedMap: chunksDownloadedMap,
             directoryHandle: directoryHandle,
             isMedia: isMedia,
+            lastRequestedNodeID: "",
+            lastProgress: 0,
+            retryCount: 0,
+            hinterNodeIDs: undefined,
             fileHandle: fileHandle,
             fileStream: fileStream,
             memoryChunks: fileStream ? undefined : new Uint8Array(fileInfo.totalSize),
-        } as FileDownload);
+        };
+        this.fileDownloads.set(fileInfo.fileId, fileDownload);
         this.startFileDownloadTimer();
-        console.log("Downloading...", Date.now())
+        console.log("Downloading...", Date.now());
+        let addDownloadAction: AddDownloadAction = {
+            key: poolKey,
+            fileInfo: fileInfo,
+        };
+        store.dispatch(poolAction.addDownload(addDownloadAction));
         return true;
     }
 
-    addFileChunk(fileID: string, chunkNumber: number, binaryData: ArrayBuffer) {
+    getFileDownloadProgress(fileID: string): number {
+        let fileDownload = this.fileDownloads.get(fileID);
+        if (!fileDownload) return 0;
+        return Math.trunc((fileDownload.chunksDownloaded / fileDownload.totalChunks) * 100);
+    }
+
+    hasFileDownload(fileID: string): boolean {
+        return this.fileDownloads.has(fileID);
+    }
+
+    getFileDownload(fileID: string): FileDownload | undefined {
+        return this.fileDownloads.get(fileID);
+    }
+
+    getFileDownloadInfo(fileID: string): PoolFileInfo | undefined {
+        return this.fileDownloads.get(fileID)?.fileInfo;
+    }
+
+    getFileDownloadStatus(fileID: string): PoolDownloadProgressStatus {
+        let fileDownload = this.fileDownloads.get(fileID);
+        if (!fileDownload) return PoolDownloadProgressStatus.UNAVAILABLE;
+        return fileDownload.status;
+    }
+
+    addFileChunk(fileID: string, chunkNumber: number, chunk: Uint8Array) {
         let fileDownload = this.fileDownloads.get(fileID);
         if (!fileDownload) return;
         if (fileDownload.chunksDownloadedMap[chunkNumber] == true) {
-            //console.log("ALREADY RECEIVED", chunkNumber);
+            console.log("ALREADY RECEIVED", chunkNumber);
             return;
         }
 
-        //console.log("ADDING FILE CHUNK", chunkNumber);
+        // console.log("ADDING FILE CHUNK", chunkNumber);
 
-        let offset = chunkNumber * CHUNK_SIZE
+        if (fileDownload.status != PoolDownloadProgressStatus.DOWNLOADING) {
+            fileDownload.status = PoolDownloadProgressStatus.DOWNLOADING;
+        }
+
+        let offset = chunkNumber * CHUNK_SIZE;
         if (!fileDownload.isMedia && this.fileSystemAccess) {
-            fileDownload.fileStream?.write({ type: "write", position: offset, data: binaryData }).catch((e) => {
+            fileDownload.fileStream?.write({ type: "write", position: offset, data: chunk }).catch((e) => {
                 this.completeFileDownload(fileID)
             });
         } else {
-            fileDownload.memoryChunks?.set(new Uint8Array(binaryData), offset);
+            fileDownload.memoryChunks?.set(chunk, offset);
         }
 
         fileDownload.lastModified = Date.now();
         fileDownload.chunksDownloadedMap[chunkNumber] = true;
         fileDownload.chunksDownloaded++;
 
-        // let progress = Math.trunc((fileDownload.chunksDownloaded / fileDownload.totalChunks) * 100);
-        // if (progress != fileDownload.lastProgress) {
-        //     fileDownload.lastProgress = progress;
-        //     store.dispatch(poolAction.updateDownloadProgress({
-        //         key: fileDownload.poolKey,
-        //         fileID: fileDownload.fileInfo.fileID,
-        //         progress: progress,
-        //     } as UpdateDownloadProgressAction));
-        // }
-        
         if (fileDownload.chunksDownloaded == fileDownload.totalChunks) {
             this.completeFileDownload(fileID);
         }
@@ -397,7 +421,7 @@ export class FileManagerClass {
                 fileDownload.fileStream?.close().then(() => {            
                     fileDownload?.fileHandle?.getFile().then((file) => {
                         if (!fileDownload) return;
-                        PoolManager.sendFileOfferToPool(fileDownload.poolID, file, fileDownload.fileInfo.fileID, fileDownload.fileInfo.originNodeID);
+                        PoolManager.sendFileOfferToPool(fileDownload.poolID, file, fileDownload.fileInfo.fileId, fileDownload.fileInfo.originNodeId);
                     });
                 });
             } else {
@@ -422,49 +446,87 @@ export class FileManagerClass {
 
         store.dispatch(poolAction.removeDownload({
             key: fileDownload!.poolKey,
-            fileID: fileDownload!.fileInfo.fileID,
+            fileID: fileDownload!.fileInfo.fileId,
         } as RemoveDownloadAction))
-        PoolManager.completeFileDownload(fileDownload.poolID, fileDownload.fileInfo.fileID);
         
         this.fileDownloads.delete(fileID);
     }
 
-    cacheFileChunk(fileID: string, chunkNumber: number, totalSize: number, chunk: ArrayBuffer) {
+    cacheFileChunk(fileID: string, chunkNumber: number, totalSize: number, chunk: Uint8Array) {
         if (!this.webworkerAccess) return;
-        if (!this.cacheChunkMapDataFlushTimer) this.startCacheChunksFlushTimer();
+        if (!this.cacheChunkFlushTimer) this.startCacheChunksFlushTimer();
 
+        // console.log("Adding cache file chunk", chunkNumber);
+
+        // Writing the actual files should take the seek penalty
+        // Caching file chunks shouldn't
+        // This is because you need complete cache chunks anyways
+            // VERY IMPORTANT, becuase then let's say you miss some chunks
+            // If some other node has those chunks, their chunks might be in very different places
+            // BENCHMARK seek read seek read PERFORMANCE
+        // So writing to file doesn't make sense if you aren't sure it gives you the full cacheChunk
+        // Might need to reconsider caching system...
+            // Inefficient, because if you start like multiple chunk ranges at once,
+                // And have no way of predicting whether the chunk will arrive or not,
+            // either store ALL of it in memory until complete, and then write,
+            // or read but seek every time for every chunk
+                // Benchmark 1000s of seek and read vs sequential read
+                // Also benchmark seek and write vs sequential write
+            // also UNORDERED IS A MUST (helps a lot with network congestion)
+
+        // SOLUTION:
+            // Keep cacheFileChunk logic as it is
+            // Change the whole idea of cache chunks to "cache range IN cache chunk"
+            // This is to facilitate the implementation in Rust, as they have to opportunity-
+            // to seek and write to one LARGE cache file, it can be on another thread but just one thread
         let cacheChunkNumber = getCacheChunkNumberFromChunkNumber(chunkNumber);
+
+        let cacheChunkMapData = this.cacheChunkMap.get(fileID);
+        if (cacheChunkMapData) {
+            let existingChunkRanges = cacheChunkMapData.get(cacheChunkNumber)?.chunkRanges;
+            if (existingChunkRanges && existsInChunkRanges(chunkNumber, existingChunkRanges)) return;
+        }
+
         let cacheChunk = this.fileCacheChunks.get(fileID);
         if (!cacheChunk) {
             cacheChunk = {
                 lastModified: Date.now(),
                 cacheChunkNumber: cacheChunkNumber,
-                chunkRange: [chunkNumber, chunkNumber],
+                chunkRange: {
+                    start: chunkNumber,
+                    end: chunkNumber,
+                },
                 chunks: [chunk],
             }
             this.fileCacheChunks.set(fileID, cacheChunk);
         } else {
             cacheChunk.lastModified = Date.now();
             if (cacheChunk.cacheChunkNumber == cacheChunkNumber) {
-                if (chunkNumber == cacheChunk.chunkRange[1] + 1) {
+                if (chunkNumber == cacheChunk.chunkRange.end + 1) {
                     cacheChunk.chunks.push(chunk);
-                    cacheChunk.chunkRange[1] = cacheChunk.chunkRange[1] + 1;
-                } else if (chunkNumber >= cacheChunk.chunkRange[0] && chunkNumber <= cacheChunk.chunkRange[1]) {
+                    cacheChunk.chunkRange.end = cacheChunk.chunkRange.end + 1;
+                } else if (inChunkRange(chunkNumber, cacheChunk.chunkRange)) {
                     return;
                 } else if (chunkNumber % CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR == 0) {
-                    cacheChunk.chunkRange = [ chunkNumber, chunkNumber ]
+                    cacheChunk.chunkRange = {
+                        start: chunkNumber,
+                        end: chunkNumber,
+                    }
                     cacheChunk.chunks = [ chunk ];
-                }
+                } 
             } else {
                 cacheChunk.cacheChunkNumber = cacheChunkNumber;
-                cacheChunk.chunkRange = [ chunkNumber, chunkNumber ]
+                cacheChunk.chunkRange = {
+                    start: chunkNumber,
+                    end: chunkNumber,
+                }
                 cacheChunk.chunks = [ chunk ];
             }
         }
 
         if (cacheChunk.chunks.length == CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR) {
             this.flushCacheChunk(fileID, cacheChunk);
-        } else if (cacheChunk.chunkRange[1] == chunkNumber && chunkNumber == Math.ceil(totalSize / CHUNK_SIZE) - 1) {
+        } else if (cacheChunk.chunkRange.end == chunkNumber && chunkNumber == Math.ceil(totalSize / CHUNK_SIZE) - 1) {
             //console.log("LAST CHUNK")
             this.flushCacheChunk(fileID, cacheChunk);
         }
@@ -474,7 +536,7 @@ export class FileManagerClass {
     flushCacheChunk(fileID: string, cacheChunk: CacheChunk) {
         this.fileCacheChunks.delete(fileID);
 
-        // console.log("Flushing", cacheChunk.cacheChunkNumber);
+        // console.log("Flushing cache chunk", cacheChunk.cacheChunkNumber, cacheChunk.chunkRange);
 
         let key = Date.now() + ":" + cacheChunk.cacheChunkNumber.toString() + ":" + fileID;
 
@@ -491,48 +553,56 @@ export class FileManagerClass {
             chunks: cacheChunk.chunks,
             key: key,
             deleteKey: deleteKey,
-        }, cacheChunk.chunks).then((success: boolean) => {
+        }).then((success: boolean) => {
             if (success) {
                 let cacheChunkMapData = this.cacheChunkMap.get(fileID);
-                let cacheChunkData: CacheChunkData = {
-                    key: key,
-                    cacheChunkNumber: cacheChunk.cacheChunkNumber,
-                };
         
                 if (!cacheChunkMapData) {
-                    cacheChunkMapData = [cacheChunkData];
-                    this.cacheChunkMap.set(fileID, cacheChunkMapData)
-                } else {
-                    let pos = searchPosInCacheChunkMapData(cacheChunkMapData, cacheChunk.cacheChunkNumber);
-                    if (pos >= 0) {
-                        return;
-                    } else {
-                        cacheChunkMapData.splice((-pos - 1), 0, cacheChunkData);
-                    }
+                    cacheChunkMapData = new Map<number, CacheChunkData>();
+                    this.cacheChunkMap.set(fileID, cacheChunkMapData);
                 }
-                this.cacheChunkQueue.push(key);
+
+                let existingCacheChunkData = cacheChunkMapData.get(cacheChunk.cacheChunkNumber);
+                if (!existingCacheChunkData) {
+                    existingCacheChunkData = {
+                        key: key,
+                        chunkRanges: [],
+                    }
+                    cacheChunkMapData.set(cacheChunk.cacheChunkNumber, existingCacheChunkData);
+                    this.cacheChunkQueue.push(key);
+                }
+                
+                addToChunkRanges(cacheChunk.chunkRange, existingCacheChunkData.chunkRanges);
             }
         });
     }
 
     deleteKeyFromCacheChunkMap(key: string) {
         let split = key.split(':');
-        let data = this.cacheChunkMap.get(split[2]);
+        let fileID: string = split[2];
+        let cacheChunkNumber = parseInt(split[1]);
+        let data = this.cacheChunkMap.get(fileID);
         if (data) {
-            let pos = searchPosInCacheChunkMapData(data, parseInt(split[1]));
-            if (pos >= 0) {
-                data.splice(pos, 1);
-            }
+            data.delete(cacheChunkNumber);
         }
     }
 
-    getCacheChunk(key: string): Promise<ArrayBuffer[]> {
-        return this.webworker.exec('getCacheChunk', key).then((ab: any) => {
-            if (!ab) {
-                this.deleteKeyFromCacheChunkMap(key);
+    getCacheChunk(key: string): Promise<Uint8Array[] | undefined> {
+        let split = key.split(':');
+        let data = this.cacheChunkMap.get(split[2]);
+        if (data) {
+            let cacheChunkNumber = parseInt(split[1]);
+            if (data.has(cacheChunkNumber)) {
+                return this.webworker.exec('getCacheChunk', key).then((ab: any) => {
+                    if (!ab) {
+                        this.deleteKeyFromCacheChunkMap(key);
+                        return undefined;
+                    }
+                    return ab;
+                });
             }
-            return ab;
-        });
+        }
+        return Promise.resolve(undefined);
     }
 
     addMediaCache(fileID: string, blob: Blob) {
@@ -562,7 +632,8 @@ export class FileManagerClass {
         return this.mediaCacheObjectURL.has(fileID);
     }
 
-    getCacheChunkMapData(fileID: string): CacheChunkMapData | undefined {
+    getCacheChunkMapData(fileID: string): Map<number, CacheChunkData> | undefined {
         return this.cacheChunkMap.get(fileID);
     }
+
 }
