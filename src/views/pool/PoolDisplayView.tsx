@@ -1,9 +1,9 @@
 
 import { useState, useRef, memo, useEffect } from 'react'
 import { CircularProgressbar } from 'react-circular-progressbar'
-import { fileSizeToString } from '../../helpers/file-size'
+import { fileSizeToString } from '../../utils/file-size'
 import { FileManager, PoolManager } from '../../pool/global'
-import { Pool, PoolConnectionState, PoolDownloadProgressStatus, PoolFileOffer } from '../../pool/pool.model'
+import { Pool, PoolConnectionState, PoolDownloadProgressStatus } from '../../pool/pool.model'
 import { IndicatorDot } from '../components/IndicatorDot'
 import { PoolDisplayUsersView } from './PoolDisplayUsersView'
 import { PoolMessageMode, UserMapType } from './PoolView'
@@ -15,6 +15,7 @@ import AddImageIcon from '../../assets/add-image.png'
 import FileIcon from '../../assets/file.png'
 import CancelIcon from '../../assets/trash.png'
 import SendIcon from '../../assets/send.png'
+import { PoolFileOffer } from '../../pool/pool.v1'
 
 export interface PoolDisplayViewParams {
     pool: Pool;
@@ -171,12 +172,12 @@ function PoolDisplayViewComponent({ pool, messageMode, userMap }: PoolDisplayVie
                 </div>
                 {/* delete file(s) button with function to delete multiple files by just clicking*/}
                 {
-                    FileManager.getFileOffers(pool.poolID)?.map((poolFileInfo) => (
-                        <div className="display-cancel-button-container" key={poolFileInfo.fileID} onClick={() => sendRetractFileOffer(poolFileInfo.fileID)}>
+                    FileManager.getFileOffers(pool.poolID)?.map((poolFile) => (
+                        <div className="display-cancel-button-container" key={poolFile.fileInfo.fileId} onClick={() => sendRetractFileOffer(poolFile.fileInfo.fileId)}>
                             <div className="display-file-container display-cancel-button-child elipsify-container">
                                 <img src={FileIcon} height={22} width={22} />
-                                <span className="display-file-name elipsify-content">{poolFileInfo.fileName}</span>
-                                <span className="display-file-size elipsify-extra">{fileSizeToString(poolFileInfo.totalSize)}</span>
+                                <span className="display-file-name elipsify-content">{poolFile.fileInfo.fileName}</span>
+                                <span className="display-file-size elipsify-extra">{fileSizeToString(poolFile.fileInfo.totalSize)}</span>
                             </div>
                             <img className="display-cancel-button-icon" src={CancelIcon}/>
                         </div>
@@ -215,24 +216,24 @@ function DownloadQueue({ poolID, downloadQueue }: { poolID: string, downloadQueu
                 downloadQueue.map((fileOffer) => (
                     <div 
                         className="display-cancel-button-container display-downloading-file-container" 
-                        onClick={() => PoolManager.sendRemoveFileRequest(poolID, fileOffer)}
-                        key={fileOffer.fileID}>
+                        onClick={() => PoolManager.sendRetractFileRequest(poolID, fileOffer)}
+                        key={fileOffer.fileInfo!.fileId}>
                         <div className="display-downloading-file display-cancel-button-child">
                             <div className="display-downloading-file-progress">
                                 <CircularProgressbar 
-                                    value={FileManager.getFileDownloadProgress(fileOffer.fileID)} 
+                                    value={FileManager.getFileDownloadProgress(fileOffer.fileInfo!.fileId)} 
                                     strokeWidth={15} 
                                     styles={{
                                         path: {
-                                            stroke: `rgb(${getRGBFromDownloadProgressStatus(FileManager.getFileDownloadStatus(fileOffer.fileID))})`,
+                                            stroke: `rgb(${getRGBFromDownloadProgressStatus(FileManager.getFileDownloadStatus(fileOffer.fileInfo!.fileId))})`,
                                         },
                                         trail: {
-                                            stroke: `rgba(${getRGBFromDownloadProgressStatus(FileManager.getFileDownloadStatus(fileOffer.fileID))}, 0.1)`
+                                            stroke: `rgba(${getRGBFromDownloadProgressStatus(FileManager.getFileDownloadStatus(fileOffer.fileInfo!.fileId))}, 0.1)`
                                         }
                                     }} />
                             </div>
                             <div className="display-downloading-file-name">
-                                {fileOffer.fileName}
+                                {fileOffer.fileInfo!.fileName}
                             </div>
                         </div>
                         <img className="display-cancel-button-icon" src={CancelIcon}/>

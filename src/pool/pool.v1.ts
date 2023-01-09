@@ -71,6 +71,11 @@ export interface PoolFileInfo {
   originNodeId: string;
 }
 
+export interface PoolFileOffer {
+  fileInfo: PoolFileInfo | undefined;
+  seederNodeId: string;
+}
+
 export interface PoolFileSeeders {
   fileInfo: PoolFileInfo | undefined;
   seederNodeIds: string[];
@@ -82,6 +87,13 @@ export interface PoolImageData {
   previewImageBase64: string;
 }
 
+export interface PoolChunkRange {
+  /** inclusive */
+  start: number;
+  /** inclusive */
+  end: number;
+}
+
 export interface PoolMessage {
   msgId: string;
   type: PoolMessage_Type;
@@ -91,10 +103,11 @@ export interface PoolMessage {
   latestRequestData?: PoolMessage_LatestRequestData | undefined;
   latestReplyData?: PoolMessage_LatestReplyData | undefined;
   textData?: PoolMessage_TextData | undefined;
-  fileOfferData?: PoolMessage_FileOfferData | undefined;
+  fileOfferData?: PoolFileOffer | undefined;
   mediaOfferData?: PoolMessage_MediaOfferData | undefined;
   fileRequestData?: PoolMessage_FileRequestData | undefined;
   mediaHintRequestData?: PoolMessage_MediaHintRequestData | undefined;
+  mediaHintReplyData?: PoolMessage_MediaHintReplyData | undefined;
   retractFileOfferData?: PoolMessage_RetractFileOfferData | undefined;
   retractFileRequestData?: PoolMessage_RetractFileRequestData | undefined;
 }
@@ -108,8 +121,9 @@ export enum PoolMessage_Type {
   MEDIA_OFFER = 5,
   FILE_REQUEST = 6,
   MEDIA_HINT_REQUEST = 7,
-  RETRACT_FILE_OFFER = 8,
-  RETRACT_FILE_REQUEST = 9,
+  MEDIA_HINT_REPLY = 8,
+  RETRACT_FILE_OFFER = 9,
+  RETRACT_FILE_REQUEST = 10,
   UNRECOGNIZED = -1,
 }
 
@@ -140,9 +154,12 @@ export function poolMessage_TypeFromJSON(object: any): PoolMessage_Type {
     case "MEDIA_HINT_REQUEST":
       return PoolMessage_Type.MEDIA_HINT_REQUEST;
     case 8:
+    case "MEDIA_HINT_REPLY":
+      return PoolMessage_Type.MEDIA_HINT_REPLY;
+    case 9:
     case "RETRACT_FILE_OFFER":
       return PoolMessage_Type.RETRACT_FILE_OFFER;
-    case 9:
+    case 10:
     case "RETRACT_FILE_REQUEST":
       return PoolMessage_Type.RETRACT_FILE_REQUEST;
     case -1:
@@ -170,6 +187,8 @@ export function poolMessage_TypeToJSON(object: PoolMessage_Type): string {
       return "FILE_REQUEST";
     case PoolMessage_Type.MEDIA_HINT_REQUEST:
       return "MEDIA_HINT_REQUEST";
+    case PoolMessage_Type.MEDIA_HINT_REPLY:
+      return "MEDIA_HINT_REPLY";
     case PoolMessage_Type.RETRACT_FILE_OFFER:
       return "RETRACT_FILE_OFFER";
     case PoolMessage_Type.RETRACT_FILE_REQUEST:
@@ -190,38 +209,38 @@ export interface PoolMessage_LatestRequestData {
   messagesOnly: boolean;
   lastMessageId: string;
   missedMessages: PoolMessage[];
-  initFileOffers: PoolMessage_FileOfferData[];
+  initFileOffers: PoolFileOffer[];
 }
 
 export interface PoolMessage_LatestReplyData {
   messages: PoolMessage[];
   fileSeeders: PoolFileSeeders[];
+  lastMessageIdFound: boolean;
 }
 
 export interface PoolMessage_TextData {
   text: string;
 }
 
-export interface PoolMessage_FileOfferData {
-  fileInfo: PoolFileInfo | undefined;
-  seederNodeId: string;
-}
-
 export interface PoolMessage_MediaOfferData {
-  fileOffer: PoolMessage_FileOfferData | undefined;
+  fileOffer: PoolFileOffer | undefined;
   mediaType: PoolMediaType;
-  extension: string;
+  format: string;
   imageData?: PoolImageData | undefined;
 }
 
 export interface PoolMessage_FileRequestData {
   fileId: string;
   requestingNodeId: string;
-  chunksMissing: number[];
-  promisedCacheChunks: number[];
+  chunksMissing: PoolChunkRange[];
+  promisedChunks: PoolChunkRange[];
 }
 
 export interface PoolMessage_MediaHintRequestData {
+  fileId: string;
+}
+
+export interface PoolMessage_MediaHintReplyData {
   fileId: string;
 }
 
@@ -235,28 +254,51 @@ export interface PoolMessage_RetractFileRequestData {
   requestingNodeId: string;
 }
 
-export interface PoolFileChunkMessage {
-  fileId: string;
-  chunkNumber: number;
-  chunk: Uint8Array;
-}
-
-export interface PoolMessagePackage {
-  src: PoolMessagePackage_SourceInfo | undefined;
-  dests: PoolMessagePackage_DestinationInfo[];
-  partnerIntPath?: number | undefined;
-  msg?: PoolMessage | undefined;
-  fileChunkMsg?: PoolFileChunkMessage | undefined;
-}
-
-export interface PoolMessagePackage_SourceInfo {
+export interface PoolMessagePackageSourceInfo {
   nodeId: string;
   path: number[];
 }
 
-export interface PoolMessagePackage_DestinationInfo {
+/** WARNING: pool.hacks relies on this implementation */
+export interface PoolMessagePackageDestinationInfo {
   nodeId: string;
-  visited: boolean;
+  /** To force encode visited = false */
+  visited?: boolean | undefined;
+}
+
+export interface PoolChunkInfo {
+  fileId: string;
+  chunkNumber: number;
+}
+
+/**
+ * problem with optional PoolMessage is decoders
+ * can run to problems where 0 is default, thereby
+ * making optional useless
+ */
+export interface PoolMessagePackage {
+  src: PoolMessagePackageSourceInfo | undefined;
+  dests: PoolMessagePackageDestinationInfo[];
+  /** bool has_partner_int_path = 3; */
+  partnerIntPath?: number | undefined;
+  msg?: PoolMessage | undefined;
+  chunkInfo?: PoolChunkInfo | undefined;
+}
+
+/** For encoding */
+export interface PoolMessagePackageWithChunk {
+  src: PoolMessagePackageSourceInfo | undefined;
+  dests: PoolMessagePackageDestinationInfo[];
+  /** bool has_partner_int_path = 3; */
+  partnerIntPath?: number | undefined;
+  msg?: PoolMessage | undefined;
+  chunkInfo?: PoolChunkInfo | undefined;
+  chunk?: Uint8Array | undefined;
+}
+
+/** For decoding */
+export interface PoolMessagePackageWithOnlyChunk {
+  chunk?: Uint8Array | undefined;
 }
 
 function createBasePoolFileInfo(): PoolFileInfo {
@@ -331,6 +373,67 @@ export const PoolFileInfo = {
     message.fileName = object.fileName ?? "";
     message.totalSize = object.totalSize ?? 0;
     message.originNodeId = object.originNodeId ?? "";
+    return message;
+  },
+};
+
+function createBasePoolFileOffer(): PoolFileOffer {
+  return { fileInfo: undefined, seederNodeId: "" };
+}
+
+export const PoolFileOffer = {
+  encode(message: PoolFileOffer, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.fileInfo !== undefined) {
+      PoolFileInfo.encode(message.fileInfo, writer.uint32(10).fork()).ldelim();
+    }
+    if (message.seederNodeId !== "") {
+      writer.uint32(18).string(message.seederNodeId);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): PoolFileOffer {
+    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePoolFileOffer();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          message.fileInfo = PoolFileInfo.decode(reader, reader.uint32());
+          break;
+        case 2:
+          message.seederNodeId = reader.string();
+          break;
+        default:
+          reader.skipType(tag & 7);
+          break;
+      }
+    }
+    return message;
+  },
+
+  fromJSON(object: any): PoolFileOffer {
+    return {
+      fileInfo: isSet(object.fileInfo) ? PoolFileInfo.fromJSON(object.fileInfo) : undefined,
+      seederNodeId: isSet(object.seederNodeId) ? String(object.seederNodeId) : "",
+    };
+  },
+
+  toJSON(message: PoolFileOffer): unknown {
+    const obj: any = {};
+    message.fileInfo !== undefined &&
+      (obj.fileInfo = message.fileInfo ? PoolFileInfo.toJSON(message.fileInfo) : undefined);
+    message.seederNodeId !== undefined && (obj.seederNodeId = message.seederNodeId);
+    return obj;
+  },
+
+  fromPartial<I extends Exact<DeepPartial<PoolFileOffer>, I>>(object: I): PoolFileOffer {
+    const message = createBasePoolFileOffer();
+    message.fileInfo = (object.fileInfo !== undefined && object.fileInfo !== null)
+      ? PoolFileInfo.fromPartial(object.fileInfo)
+      : undefined;
+    message.seederNodeId = object.seederNodeId ?? "";
     return message;
   },
 };
@@ -467,6 +570,61 @@ export const PoolImageData = {
   },
 };
 
+function createBasePoolChunkRange(): PoolChunkRange {
+  return { start: 0, end: 0 };
+}
+
+export const PoolChunkRange = {
+  encode(message: PoolChunkRange, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.start !== 0) {
+      writer.uint32(8).int64(message.start);
+    }
+    if (message.end !== 0) {
+      writer.uint32(16).int64(message.end);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): PoolChunkRange {
+    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePoolChunkRange();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          message.start = longToNumber(reader.int64() as Long);
+          break;
+        case 2:
+          message.end = longToNumber(reader.int64() as Long);
+          break;
+        default:
+          reader.skipType(tag & 7);
+          break;
+      }
+    }
+    return message;
+  },
+
+  fromJSON(object: any): PoolChunkRange {
+    return { start: isSet(object.start) ? Number(object.start) : 0, end: isSet(object.end) ? Number(object.end) : 0 };
+  },
+
+  toJSON(message: PoolChunkRange): unknown {
+    const obj: any = {};
+    message.start !== undefined && (obj.start = Math.round(message.start));
+    message.end !== undefined && (obj.end = Math.round(message.end));
+    return obj;
+  },
+
+  fromPartial<I extends Exact<DeepPartial<PoolChunkRange>, I>>(object: I): PoolChunkRange {
+    const message = createBasePoolChunkRange();
+    message.start = object.start ?? 0;
+    message.end = object.end ?? 0;
+    return message;
+  },
+};
+
 function createBasePoolMessage(): PoolMessage {
   return {
     msgId: "",
@@ -481,6 +639,7 @@ function createBasePoolMessage(): PoolMessage {
     mediaOfferData: undefined,
     fileRequestData: undefined,
     mediaHintRequestData: undefined,
+    mediaHintReplyData: undefined,
     retractFileOfferData: undefined,
     retractFileRequestData: undefined,
   };
@@ -513,7 +672,7 @@ export const PoolMessage = {
       PoolMessage_TextData.encode(message.textData, writer.uint32(66).fork()).ldelim();
     }
     if (message.fileOfferData !== undefined) {
-      PoolMessage_FileOfferData.encode(message.fileOfferData, writer.uint32(74).fork()).ldelim();
+      PoolFileOffer.encode(message.fileOfferData, writer.uint32(74).fork()).ldelim();
     }
     if (message.mediaOfferData !== undefined) {
       PoolMessage_MediaOfferData.encode(message.mediaOfferData, writer.uint32(82).fork()).ldelim();
@@ -524,11 +683,14 @@ export const PoolMessage = {
     if (message.mediaHintRequestData !== undefined) {
       PoolMessage_MediaHintRequestData.encode(message.mediaHintRequestData, writer.uint32(98).fork()).ldelim();
     }
+    if (message.mediaHintReplyData !== undefined) {
+      PoolMessage_MediaHintReplyData.encode(message.mediaHintReplyData, writer.uint32(106).fork()).ldelim();
+    }
     if (message.retractFileOfferData !== undefined) {
-      PoolMessage_RetractFileOfferData.encode(message.retractFileOfferData, writer.uint32(106).fork()).ldelim();
+      PoolMessage_RetractFileOfferData.encode(message.retractFileOfferData, writer.uint32(114).fork()).ldelim();
     }
     if (message.retractFileRequestData !== undefined) {
-      PoolMessage_RetractFileRequestData.encode(message.retractFileRequestData, writer.uint32(114).fork()).ldelim();
+      PoolMessage_RetractFileRequestData.encode(message.retractFileRequestData, writer.uint32(122).fork()).ldelim();
     }
     return writer;
   },
@@ -565,7 +727,7 @@ export const PoolMessage = {
           message.textData = PoolMessage_TextData.decode(reader, reader.uint32());
           break;
         case 9:
-          message.fileOfferData = PoolMessage_FileOfferData.decode(reader, reader.uint32());
+          message.fileOfferData = PoolFileOffer.decode(reader, reader.uint32());
           break;
         case 10:
           message.mediaOfferData = PoolMessage_MediaOfferData.decode(reader, reader.uint32());
@@ -577,9 +739,12 @@ export const PoolMessage = {
           message.mediaHintRequestData = PoolMessage_MediaHintRequestData.decode(reader, reader.uint32());
           break;
         case 13:
-          message.retractFileOfferData = PoolMessage_RetractFileOfferData.decode(reader, reader.uint32());
+          message.mediaHintReplyData = PoolMessage_MediaHintReplyData.decode(reader, reader.uint32());
           break;
         case 14:
+          message.retractFileOfferData = PoolMessage_RetractFileOfferData.decode(reader, reader.uint32());
+          break;
+        case 15:
           message.retractFileRequestData = PoolMessage_RetractFileRequestData.decode(reader, reader.uint32());
           break;
         default:
@@ -604,7 +769,7 @@ export const PoolMessage = {
         ? PoolMessage_LatestReplyData.fromJSON(object.latestReplyData)
         : undefined,
       textData: isSet(object.textData) ? PoolMessage_TextData.fromJSON(object.textData) : undefined,
-      fileOfferData: isSet(object.fileOfferData) ? PoolMessage_FileOfferData.fromJSON(object.fileOfferData) : undefined,
+      fileOfferData: isSet(object.fileOfferData) ? PoolFileOffer.fromJSON(object.fileOfferData) : undefined,
       mediaOfferData: isSet(object.mediaOfferData)
         ? PoolMessage_MediaOfferData.fromJSON(object.mediaOfferData)
         : undefined,
@@ -613,6 +778,9 @@ export const PoolMessage = {
         : undefined,
       mediaHintRequestData: isSet(object.mediaHintRequestData)
         ? PoolMessage_MediaHintRequestData.fromJSON(object.mediaHintRequestData)
+        : undefined,
+      mediaHintReplyData: isSet(object.mediaHintReplyData)
+        ? PoolMessage_MediaHintReplyData.fromJSON(object.mediaHintReplyData)
         : undefined,
       retractFileOfferData: isSet(object.retractFileOfferData)
         ? PoolMessage_RetractFileOfferData.fromJSON(object.retractFileOfferData)
@@ -640,7 +808,7 @@ export const PoolMessage = {
     message.textData !== undefined &&
       (obj.textData = message.textData ? PoolMessage_TextData.toJSON(message.textData) : undefined);
     message.fileOfferData !== undefined &&
-      (obj.fileOfferData = message.fileOfferData ? PoolMessage_FileOfferData.toJSON(message.fileOfferData) : undefined);
+      (obj.fileOfferData = message.fileOfferData ? PoolFileOffer.toJSON(message.fileOfferData) : undefined);
     message.mediaOfferData !== undefined && (obj.mediaOfferData = message.mediaOfferData
       ? PoolMessage_MediaOfferData.toJSON(message.mediaOfferData)
       : undefined);
@@ -649,6 +817,9 @@ export const PoolMessage = {
       : undefined);
     message.mediaHintRequestData !== undefined && (obj.mediaHintRequestData = message.mediaHintRequestData
       ? PoolMessage_MediaHintRequestData.toJSON(message.mediaHintRequestData)
+      : undefined);
+    message.mediaHintReplyData !== undefined && (obj.mediaHintReplyData = message.mediaHintReplyData
+      ? PoolMessage_MediaHintReplyData.toJSON(message.mediaHintReplyData)
       : undefined);
     message.retractFileOfferData !== undefined && (obj.retractFileOfferData = message.retractFileOfferData
       ? PoolMessage_RetractFileOfferData.toJSON(message.retractFileOfferData)
@@ -678,7 +849,7 @@ export const PoolMessage = {
       ? PoolMessage_TextData.fromPartial(object.textData)
       : undefined;
     message.fileOfferData = (object.fileOfferData !== undefined && object.fileOfferData !== null)
-      ? PoolMessage_FileOfferData.fromPartial(object.fileOfferData)
+      ? PoolFileOffer.fromPartial(object.fileOfferData)
       : undefined;
     message.mediaOfferData = (object.mediaOfferData !== undefined && object.mediaOfferData !== null)
       ? PoolMessage_MediaOfferData.fromPartial(object.mediaOfferData)
@@ -688,6 +859,9 @@ export const PoolMessage = {
       : undefined;
     message.mediaHintRequestData = (object.mediaHintRequestData !== undefined && object.mediaHintRequestData !== null)
       ? PoolMessage_MediaHintRequestData.fromPartial(object.mediaHintRequestData)
+      : undefined;
+    message.mediaHintReplyData = (object.mediaHintReplyData !== undefined && object.mediaHintReplyData !== null)
+      ? PoolMessage_MediaHintReplyData.fromPartial(object.mediaHintReplyData)
       : undefined;
     message.retractFileOfferData = (object.retractFileOfferData !== undefined && object.retractFileOfferData !== null)
       ? PoolMessage_RetractFileOfferData.fromPartial(object.retractFileOfferData)
@@ -783,7 +957,7 @@ export const PoolMessage_LatestRequestData = {
       PoolMessage.encode(v!, writer.uint32(26).fork()).ldelim();
     }
     for (const v of message.initFileOffers) {
-      PoolMessage_FileOfferData.encode(v!, writer.uint32(34).fork()).ldelim();
+      PoolFileOffer.encode(v!, writer.uint32(34).fork()).ldelim();
     }
     return writer;
   },
@@ -805,7 +979,7 @@ export const PoolMessage_LatestRequestData = {
           message.missedMessages.push(PoolMessage.decode(reader, reader.uint32()));
           break;
         case 4:
-          message.initFileOffers.push(PoolMessage_FileOfferData.decode(reader, reader.uint32()));
+          message.initFileOffers.push(PoolFileOffer.decode(reader, reader.uint32()));
           break;
         default:
           reader.skipType(tag & 7);
@@ -823,7 +997,7 @@ export const PoolMessage_LatestRequestData = {
         ? object.missedMessages.map((e: any) => PoolMessage.fromJSON(e))
         : [],
       initFileOffers: Array.isArray(object?.initFileOffers)
-        ? object.initFileOffers.map((e: any) => PoolMessage_FileOfferData.fromJSON(e))
+        ? object.initFileOffers.map((e: any) => PoolFileOffer.fromJSON(e))
         : [],
     };
   },
@@ -838,7 +1012,7 @@ export const PoolMessage_LatestRequestData = {
       obj.missedMessages = [];
     }
     if (message.initFileOffers) {
-      obj.initFileOffers = message.initFileOffers.map((e) => e ? PoolMessage_FileOfferData.toJSON(e) : undefined);
+      obj.initFileOffers = message.initFileOffers.map((e) => e ? PoolFileOffer.toJSON(e) : undefined);
     } else {
       obj.initFileOffers = [];
     }
@@ -852,13 +1026,13 @@ export const PoolMessage_LatestRequestData = {
     message.messagesOnly = object.messagesOnly ?? false;
     message.lastMessageId = object.lastMessageId ?? "";
     message.missedMessages = object.missedMessages?.map((e) => PoolMessage.fromPartial(e)) || [];
-    message.initFileOffers = object.initFileOffers?.map((e) => PoolMessage_FileOfferData.fromPartial(e)) || [];
+    message.initFileOffers = object.initFileOffers?.map((e) => PoolFileOffer.fromPartial(e)) || [];
     return message;
   },
 };
 
 function createBasePoolMessage_LatestReplyData(): PoolMessage_LatestReplyData {
-  return { messages: [], fileSeeders: [] };
+  return { messages: [], fileSeeders: [], lastMessageIdFound: false };
 }
 
 export const PoolMessage_LatestReplyData = {
@@ -868,6 +1042,9 @@ export const PoolMessage_LatestReplyData = {
     }
     for (const v of message.fileSeeders) {
       PoolFileSeeders.encode(v!, writer.uint32(18).fork()).ldelim();
+    }
+    if (message.lastMessageIdFound === true) {
+      writer.uint32(24).bool(message.lastMessageIdFound);
     }
     return writer;
   },
@@ -885,6 +1062,9 @@ export const PoolMessage_LatestReplyData = {
         case 2:
           message.fileSeeders.push(PoolFileSeeders.decode(reader, reader.uint32()));
           break;
+        case 3:
+          message.lastMessageIdFound = reader.bool();
+          break;
         default:
           reader.skipType(tag & 7);
           break;
@@ -899,6 +1079,7 @@ export const PoolMessage_LatestReplyData = {
       fileSeeders: Array.isArray(object?.fileSeeders)
         ? object.fileSeeders.map((e: any) => PoolFileSeeders.fromJSON(e))
         : [],
+      lastMessageIdFound: isSet(object.lastMessageIdFound) ? Boolean(object.lastMessageIdFound) : false,
     };
   },
 
@@ -914,6 +1095,7 @@ export const PoolMessage_LatestReplyData = {
     } else {
       obj.fileSeeders = [];
     }
+    message.lastMessageIdFound !== undefined && (obj.lastMessageIdFound = message.lastMessageIdFound);
     return obj;
   },
 
@@ -921,6 +1103,7 @@ export const PoolMessage_LatestReplyData = {
     const message = createBasePoolMessage_LatestReplyData();
     message.messages = object.messages?.map((e) => PoolMessage.fromPartial(e)) || [];
     message.fileSeeders = object.fileSeeders?.map((e) => PoolFileSeeders.fromPartial(e)) || [];
+    message.lastMessageIdFound = object.lastMessageIdFound ?? false;
     return message;
   },
 };
@@ -972,81 +1155,20 @@ export const PoolMessage_TextData = {
   },
 };
 
-function createBasePoolMessage_FileOfferData(): PoolMessage_FileOfferData {
-  return { fileInfo: undefined, seederNodeId: "" };
-}
-
-export const PoolMessage_FileOfferData = {
-  encode(message: PoolMessage_FileOfferData, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
-    if (message.fileInfo !== undefined) {
-      PoolFileInfo.encode(message.fileInfo, writer.uint32(10).fork()).ldelim();
-    }
-    if (message.seederNodeId !== "") {
-      writer.uint32(18).string(message.seederNodeId);
-    }
-    return writer;
-  },
-
-  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessage_FileOfferData {
-    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
-    let end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBasePoolMessage_FileOfferData();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1:
-          message.fileInfo = PoolFileInfo.decode(reader, reader.uint32());
-          break;
-        case 2:
-          message.seederNodeId = reader.string();
-          break;
-        default:
-          reader.skipType(tag & 7);
-          break;
-      }
-    }
-    return message;
-  },
-
-  fromJSON(object: any): PoolMessage_FileOfferData {
-    return {
-      fileInfo: isSet(object.fileInfo) ? PoolFileInfo.fromJSON(object.fileInfo) : undefined,
-      seederNodeId: isSet(object.seederNodeId) ? String(object.seederNodeId) : "",
-    };
-  },
-
-  toJSON(message: PoolMessage_FileOfferData): unknown {
-    const obj: any = {};
-    message.fileInfo !== undefined &&
-      (obj.fileInfo = message.fileInfo ? PoolFileInfo.toJSON(message.fileInfo) : undefined);
-    message.seederNodeId !== undefined && (obj.seederNodeId = message.seederNodeId);
-    return obj;
-  },
-
-  fromPartial<I extends Exact<DeepPartial<PoolMessage_FileOfferData>, I>>(object: I): PoolMessage_FileOfferData {
-    const message = createBasePoolMessage_FileOfferData();
-    message.fileInfo = (object.fileInfo !== undefined && object.fileInfo !== null)
-      ? PoolFileInfo.fromPartial(object.fileInfo)
-      : undefined;
-    message.seederNodeId = object.seederNodeId ?? "";
-    return message;
-  },
-};
-
 function createBasePoolMessage_MediaOfferData(): PoolMessage_MediaOfferData {
-  return { fileOffer: undefined, mediaType: 0, extension: "", imageData: undefined };
+  return { fileOffer: undefined, mediaType: 0, format: "", imageData: undefined };
 }
 
 export const PoolMessage_MediaOfferData = {
   encode(message: PoolMessage_MediaOfferData, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.fileOffer !== undefined) {
-      PoolMessage_FileOfferData.encode(message.fileOffer, writer.uint32(10).fork()).ldelim();
+      PoolFileOffer.encode(message.fileOffer, writer.uint32(10).fork()).ldelim();
     }
     if (message.mediaType !== 0) {
       writer.uint32(16).int32(message.mediaType);
     }
-    if (message.extension !== "") {
-      writer.uint32(26).string(message.extension);
+    if (message.format !== "") {
+      writer.uint32(26).string(message.format);
     }
     if (message.imageData !== undefined) {
       PoolImageData.encode(message.imageData, writer.uint32(34).fork()).ldelim();
@@ -1062,13 +1184,13 @@ export const PoolMessage_MediaOfferData = {
       const tag = reader.uint32();
       switch (tag >>> 3) {
         case 1:
-          message.fileOffer = PoolMessage_FileOfferData.decode(reader, reader.uint32());
+          message.fileOffer = PoolFileOffer.decode(reader, reader.uint32());
           break;
         case 2:
           message.mediaType = reader.int32() as any;
           break;
         case 3:
-          message.extension = reader.string();
+          message.format = reader.string();
           break;
         case 4:
           message.imageData = PoolImageData.decode(reader, reader.uint32());
@@ -1083,9 +1205,9 @@ export const PoolMessage_MediaOfferData = {
 
   fromJSON(object: any): PoolMessage_MediaOfferData {
     return {
-      fileOffer: isSet(object.fileOffer) ? PoolMessage_FileOfferData.fromJSON(object.fileOffer) : undefined,
+      fileOffer: isSet(object.fileOffer) ? PoolFileOffer.fromJSON(object.fileOffer) : undefined,
       mediaType: isSet(object.mediaType) ? poolMediaTypeFromJSON(object.mediaType) : 0,
-      extension: isSet(object.extension) ? String(object.extension) : "",
+      format: isSet(object.format) ? String(object.format) : "",
       imageData: isSet(object.imageData) ? PoolImageData.fromJSON(object.imageData) : undefined,
     };
   },
@@ -1093,9 +1215,9 @@ export const PoolMessage_MediaOfferData = {
   toJSON(message: PoolMessage_MediaOfferData): unknown {
     const obj: any = {};
     message.fileOffer !== undefined &&
-      (obj.fileOffer = message.fileOffer ? PoolMessage_FileOfferData.toJSON(message.fileOffer) : undefined);
+      (obj.fileOffer = message.fileOffer ? PoolFileOffer.toJSON(message.fileOffer) : undefined);
     message.mediaType !== undefined && (obj.mediaType = poolMediaTypeToJSON(message.mediaType));
-    message.extension !== undefined && (obj.extension = message.extension);
+    message.format !== undefined && (obj.format = message.format);
     message.imageData !== undefined &&
       (obj.imageData = message.imageData ? PoolImageData.toJSON(message.imageData) : undefined);
     return obj;
@@ -1104,10 +1226,10 @@ export const PoolMessage_MediaOfferData = {
   fromPartial<I extends Exact<DeepPartial<PoolMessage_MediaOfferData>, I>>(object: I): PoolMessage_MediaOfferData {
     const message = createBasePoolMessage_MediaOfferData();
     message.fileOffer = (object.fileOffer !== undefined && object.fileOffer !== null)
-      ? PoolMessage_FileOfferData.fromPartial(object.fileOffer)
+      ? PoolFileOffer.fromPartial(object.fileOffer)
       : undefined;
     message.mediaType = object.mediaType ?? 0;
-    message.extension = object.extension ?? "";
+    message.format = object.format ?? "";
     message.imageData = (object.imageData !== undefined && object.imageData !== null)
       ? PoolImageData.fromPartial(object.imageData)
       : undefined;
@@ -1116,7 +1238,7 @@ export const PoolMessage_MediaOfferData = {
 };
 
 function createBasePoolMessage_FileRequestData(): PoolMessage_FileRequestData {
-  return { fileId: "", requestingNodeId: "", chunksMissing: [], promisedCacheChunks: [] };
+  return { fileId: "", requestingNodeId: "", chunksMissing: [], promisedChunks: [] };
 }
 
 export const PoolMessage_FileRequestData = {
@@ -1127,16 +1249,12 @@ export const PoolMessage_FileRequestData = {
     if (message.requestingNodeId !== "") {
       writer.uint32(18).string(message.requestingNodeId);
     }
-    writer.uint32(26).fork();
     for (const v of message.chunksMissing) {
-      writer.int64(v);
+      PoolChunkRange.encode(v!, writer.uint32(26).fork()).ldelim();
     }
-    writer.ldelim();
-    writer.uint32(34).fork();
-    for (const v of message.promisedCacheChunks) {
-      writer.int64(v);
+    for (const v of message.promisedChunks) {
+      PoolChunkRange.encode(v!, writer.uint32(34).fork()).ldelim();
     }
-    writer.ldelim();
     return writer;
   },
 
@@ -1154,24 +1272,10 @@ export const PoolMessage_FileRequestData = {
           message.requestingNodeId = reader.string();
           break;
         case 3:
-          if ((tag & 7) === 2) {
-            const end2 = reader.uint32() + reader.pos;
-            while (reader.pos < end2) {
-              message.chunksMissing.push(longToNumber(reader.int64() as Long));
-            }
-          } else {
-            message.chunksMissing.push(longToNumber(reader.int64() as Long));
-          }
+          message.chunksMissing.push(PoolChunkRange.decode(reader, reader.uint32()));
           break;
         case 4:
-          if ((tag & 7) === 2) {
-            const end2 = reader.uint32() + reader.pos;
-            while (reader.pos < end2) {
-              message.promisedCacheChunks.push(longToNumber(reader.int64() as Long));
-            }
-          } else {
-            message.promisedCacheChunks.push(longToNumber(reader.int64() as Long));
-          }
+          message.promisedChunks.push(PoolChunkRange.decode(reader, reader.uint32()));
           break;
         default:
           reader.skipType(tag & 7);
@@ -1185,9 +1289,11 @@ export const PoolMessage_FileRequestData = {
     return {
       fileId: isSet(object.fileId) ? String(object.fileId) : "",
       requestingNodeId: isSet(object.requestingNodeId) ? String(object.requestingNodeId) : "",
-      chunksMissing: Array.isArray(object?.chunksMissing) ? object.chunksMissing.map((e: any) => Number(e)) : [],
-      promisedCacheChunks: Array.isArray(object?.promisedCacheChunks)
-        ? object.promisedCacheChunks.map((e: any) => Number(e))
+      chunksMissing: Array.isArray(object?.chunksMissing)
+        ? object.chunksMissing.map((e: any) => PoolChunkRange.fromJSON(e))
+        : [],
+      promisedChunks: Array.isArray(object?.promisedChunks)
+        ? object.promisedChunks.map((e: any) => PoolChunkRange.fromJSON(e))
         : [],
     };
   },
@@ -1197,14 +1303,14 @@ export const PoolMessage_FileRequestData = {
     message.fileId !== undefined && (obj.fileId = message.fileId);
     message.requestingNodeId !== undefined && (obj.requestingNodeId = message.requestingNodeId);
     if (message.chunksMissing) {
-      obj.chunksMissing = message.chunksMissing.map((e) => Math.round(e));
+      obj.chunksMissing = message.chunksMissing.map((e) => e ? PoolChunkRange.toJSON(e) : undefined);
     } else {
       obj.chunksMissing = [];
     }
-    if (message.promisedCacheChunks) {
-      obj.promisedCacheChunks = message.promisedCacheChunks.map((e) => Math.round(e));
+    if (message.promisedChunks) {
+      obj.promisedChunks = message.promisedChunks.map((e) => e ? PoolChunkRange.toJSON(e) : undefined);
     } else {
-      obj.promisedCacheChunks = [];
+      obj.promisedChunks = [];
     }
     return obj;
   },
@@ -1213,8 +1319,8 @@ export const PoolMessage_FileRequestData = {
     const message = createBasePoolMessage_FileRequestData();
     message.fileId = object.fileId ?? "";
     message.requestingNodeId = object.requestingNodeId ?? "";
-    message.chunksMissing = object.chunksMissing?.map((e) => e) || [];
-    message.promisedCacheChunks = object.promisedCacheChunks?.map((e) => e) || [];
+    message.chunksMissing = object.chunksMissing?.map((e) => PoolChunkRange.fromPartial(e)) || [];
+    message.promisedChunks = object.promisedChunks?.map((e) => PoolChunkRange.fromPartial(e)) || [];
     return message;
   },
 };
@@ -1263,6 +1369,55 @@ export const PoolMessage_MediaHintRequestData = {
     object: I,
   ): PoolMessage_MediaHintRequestData {
     const message = createBasePoolMessage_MediaHintRequestData();
+    message.fileId = object.fileId ?? "";
+    return message;
+  },
+};
+
+function createBasePoolMessage_MediaHintReplyData(): PoolMessage_MediaHintReplyData {
+  return { fileId: "" };
+}
+
+export const PoolMessage_MediaHintReplyData = {
+  encode(message: PoolMessage_MediaHintReplyData, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.fileId !== "") {
+      writer.uint32(10).string(message.fileId);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessage_MediaHintReplyData {
+    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePoolMessage_MediaHintReplyData();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          message.fileId = reader.string();
+          break;
+        default:
+          reader.skipType(tag & 7);
+          break;
+      }
+    }
+    return message;
+  },
+
+  fromJSON(object: any): PoolMessage_MediaHintReplyData {
+    return { fileId: isSet(object.fileId) ? String(object.fileId) : "" };
+  },
+
+  toJSON(message: PoolMessage_MediaHintReplyData): unknown {
+    const obj: any = {};
+    message.fileId !== undefined && (obj.fileId = message.fileId);
+    return obj;
+  },
+
+  fromPartial<I extends Exact<DeepPartial<PoolMessage_MediaHintReplyData>, I>>(
+    object: I,
+  ): PoolMessage_MediaHintReplyData {
+    const message = createBasePoolMessage_MediaHintReplyData();
     message.fileId = object.fileId ?? "";
     return message;
   },
@@ -1388,177 +1543,12 @@ export const PoolMessage_RetractFileRequestData = {
   },
 };
 
-function createBasePoolFileChunkMessage(): PoolFileChunkMessage {
-  return { fileId: "", chunkNumber: 0, chunk: new Uint8Array() };
-}
-
-export const PoolFileChunkMessage = {
-  encode(message: PoolFileChunkMessage, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
-    if (message.fileId !== "") {
-      writer.uint32(10).string(message.fileId);
-    }
-    if (message.chunkNumber !== 0) {
-      writer.uint32(16).int64(message.chunkNumber);
-    }
-    if (message.chunk.length !== 0) {
-      writer.uint32(26).bytes(message.chunk);
-    }
-    return writer;
-  },
-
-  decode(input: _m0.Reader | Uint8Array, length?: number): PoolFileChunkMessage {
-    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
-    let end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBasePoolFileChunkMessage();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1:
-          message.fileId = reader.string();
-          break;
-        case 2:
-          message.chunkNumber = longToNumber(reader.int64() as Long);
-          break;
-        case 3:
-          message.chunk = reader.bytes();
-          break;
-        default:
-          reader.skipType(tag & 7);
-          break;
-      }
-    }
-    return message;
-  },
-
-  fromJSON(object: any): PoolFileChunkMessage {
-    return {
-      fileId: isSet(object.fileId) ? String(object.fileId) : "",
-      chunkNumber: isSet(object.chunkNumber) ? Number(object.chunkNumber) : 0,
-      chunk: isSet(object.chunk) ? bytesFromBase64(object.chunk) : new Uint8Array(),
-    };
-  },
-
-  toJSON(message: PoolFileChunkMessage): unknown {
-    const obj: any = {};
-    message.fileId !== undefined && (obj.fileId = message.fileId);
-    message.chunkNumber !== undefined && (obj.chunkNumber = Math.round(message.chunkNumber));
-    message.chunk !== undefined &&
-      (obj.chunk = base64FromBytes(message.chunk !== undefined ? message.chunk : new Uint8Array()));
-    return obj;
-  },
-
-  fromPartial<I extends Exact<DeepPartial<PoolFileChunkMessage>, I>>(object: I): PoolFileChunkMessage {
-    const message = createBasePoolFileChunkMessage();
-    message.fileId = object.fileId ?? "";
-    message.chunkNumber = object.chunkNumber ?? 0;
-    message.chunk = object.chunk ?? new Uint8Array();
-    return message;
-  },
-};
-
-function createBasePoolMessagePackage(): PoolMessagePackage {
-  return { src: undefined, dests: [], partnerIntPath: undefined, msg: undefined, fileChunkMsg: undefined };
-}
-
-export const PoolMessagePackage = {
-  encode(message: PoolMessagePackage, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
-    if (message.src !== undefined) {
-      PoolMessagePackage_SourceInfo.encode(message.src, writer.uint32(10).fork()).ldelim();
-    }
-    for (const v of message.dests) {
-      PoolMessagePackage_DestinationInfo.encode(v!, writer.uint32(18).fork()).ldelim();
-    }
-    if (message.partnerIntPath !== undefined) {
-      writer.uint32(24).int32(message.partnerIntPath);
-    }
-    if (message.msg !== undefined) {
-      PoolMessage.encode(message.msg, writer.uint32(34).fork()).ldelim();
-    }
-    if (message.fileChunkMsg !== undefined) {
-      PoolFileChunkMessage.encode(message.fileChunkMsg, writer.uint32(42).fork()).ldelim();
-    }
-    return writer;
-  },
-
-  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessagePackage {
-    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
-    let end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBasePoolMessagePackage();
-    while (reader.pos < end) {
-      const tag = reader.uint32();
-      switch (tag >>> 3) {
-        case 1:
-          message.src = PoolMessagePackage_SourceInfo.decode(reader, reader.uint32());
-          break;
-        case 2:
-          message.dests.push(PoolMessagePackage_DestinationInfo.decode(reader, reader.uint32()));
-          break;
-        case 3:
-          message.partnerIntPath = reader.int32();
-          break;
-        case 4:
-          message.msg = PoolMessage.decode(reader, reader.uint32());
-          break;
-        case 5:
-          message.fileChunkMsg = PoolFileChunkMessage.decode(reader, reader.uint32());
-          break;
-        default:
-          reader.skipType(tag & 7);
-          break;
-      }
-    }
-    return message;
-  },
-
-  fromJSON(object: any): PoolMessagePackage {
-    return {
-      src: isSet(object.src) ? PoolMessagePackage_SourceInfo.fromJSON(object.src) : undefined,
-      dests: Array.isArray(object?.dests)
-        ? object.dests.map((e: any) => PoolMessagePackage_DestinationInfo.fromJSON(e))
-        : [],
-      partnerIntPath: isSet(object.partnerIntPath) ? Number(object.partnerIntPath) : undefined,
-      msg: isSet(object.msg) ? PoolMessage.fromJSON(object.msg) : undefined,
-      fileChunkMsg: isSet(object.fileChunkMsg) ? PoolFileChunkMessage.fromJSON(object.fileChunkMsg) : undefined,
-    };
-  },
-
-  toJSON(message: PoolMessagePackage): unknown {
-    const obj: any = {};
-    message.src !== undefined &&
-      (obj.src = message.src ? PoolMessagePackage_SourceInfo.toJSON(message.src) : undefined);
-    if (message.dests) {
-      obj.dests = message.dests.map((e) => e ? PoolMessagePackage_DestinationInfo.toJSON(e) : undefined);
-    } else {
-      obj.dests = [];
-    }
-    message.partnerIntPath !== undefined && (obj.partnerIntPath = Math.round(message.partnerIntPath));
-    message.msg !== undefined && (obj.msg = message.msg ? PoolMessage.toJSON(message.msg) : undefined);
-    message.fileChunkMsg !== undefined &&
-      (obj.fileChunkMsg = message.fileChunkMsg ? PoolFileChunkMessage.toJSON(message.fileChunkMsg) : undefined);
-    return obj;
-  },
-
-  fromPartial<I extends Exact<DeepPartial<PoolMessagePackage>, I>>(object: I): PoolMessagePackage {
-    const message = createBasePoolMessagePackage();
-    message.src = (object.src !== undefined && object.src !== null)
-      ? PoolMessagePackage_SourceInfo.fromPartial(object.src)
-      : undefined;
-    message.dests = object.dests?.map((e) => PoolMessagePackage_DestinationInfo.fromPartial(e)) || [];
-    message.partnerIntPath = object.partnerIntPath ?? undefined;
-    message.msg = (object.msg !== undefined && object.msg !== null) ? PoolMessage.fromPartial(object.msg) : undefined;
-    message.fileChunkMsg = (object.fileChunkMsg !== undefined && object.fileChunkMsg !== null)
-      ? PoolFileChunkMessage.fromPartial(object.fileChunkMsg)
-      : undefined;
-    return message;
-  },
-};
-
-function createBasePoolMessagePackage_SourceInfo(): PoolMessagePackage_SourceInfo {
+function createBasePoolMessagePackageSourceInfo(): PoolMessagePackageSourceInfo {
   return { nodeId: "", path: [] };
 }
 
-export const PoolMessagePackage_SourceInfo = {
-  encode(message: PoolMessagePackage_SourceInfo, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+export const PoolMessagePackageSourceInfo = {
+  encode(message: PoolMessagePackageSourceInfo, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.nodeId !== "") {
       writer.uint32(10).string(message.nodeId);
     }
@@ -1570,10 +1560,10 @@ export const PoolMessagePackage_SourceInfo = {
     return writer;
   },
 
-  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessagePackage_SourceInfo {
+  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessagePackageSourceInfo {
     const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
     let end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBasePoolMessagePackage_SourceInfo();
+    const message = createBasePoolMessagePackageSourceInfo();
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
@@ -1598,14 +1588,14 @@ export const PoolMessagePackage_SourceInfo = {
     return message;
   },
 
-  fromJSON(object: any): PoolMessagePackage_SourceInfo {
+  fromJSON(object: any): PoolMessagePackageSourceInfo {
     return {
       nodeId: isSet(object.nodeId) ? String(object.nodeId) : "",
       path: Array.isArray(object?.path) ? object.path.map((e: any) => Number(e)) : [],
     };
   },
 
-  toJSON(message: PoolMessagePackage_SourceInfo): unknown {
+  toJSON(message: PoolMessagePackageSourceInfo): unknown {
     const obj: any = {};
     message.nodeId !== undefined && (obj.nodeId = message.nodeId);
     if (message.path) {
@@ -1616,35 +1606,33 @@ export const PoolMessagePackage_SourceInfo = {
     return obj;
   },
 
-  fromPartial<I extends Exact<DeepPartial<PoolMessagePackage_SourceInfo>, I>>(
-    object: I,
-  ): PoolMessagePackage_SourceInfo {
-    const message = createBasePoolMessagePackage_SourceInfo();
+  fromPartial<I extends Exact<DeepPartial<PoolMessagePackageSourceInfo>, I>>(object: I): PoolMessagePackageSourceInfo {
+    const message = createBasePoolMessagePackageSourceInfo();
     message.nodeId = object.nodeId ?? "";
     message.path = object.path?.map((e) => e) || [];
     return message;
   },
 };
 
-function createBasePoolMessagePackage_DestinationInfo(): PoolMessagePackage_DestinationInfo {
-  return { nodeId: "", visited: false };
+function createBasePoolMessagePackageDestinationInfo(): PoolMessagePackageDestinationInfo {
+  return { nodeId: "", visited: undefined };
 }
 
-export const PoolMessagePackage_DestinationInfo = {
-  encode(message: PoolMessagePackage_DestinationInfo, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+export const PoolMessagePackageDestinationInfo = {
+  encode(message: PoolMessagePackageDestinationInfo, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.nodeId !== "") {
       writer.uint32(10).string(message.nodeId);
     }
-    if (message.visited === true) {
+    if (message.visited !== undefined) {
       writer.uint32(16).bool(message.visited);
     }
     return writer;
   },
 
-  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessagePackage_DestinationInfo {
+  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessagePackageDestinationInfo {
     const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
     let end = length === undefined ? reader.len : reader.pos + length;
-    const message = createBasePoolMessagePackage_DestinationInfo();
+    const message = createBasePoolMessagePackageDestinationInfo();
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
@@ -1662,26 +1650,343 @@ export const PoolMessagePackage_DestinationInfo = {
     return message;
   },
 
-  fromJSON(object: any): PoolMessagePackage_DestinationInfo {
+  fromJSON(object: any): PoolMessagePackageDestinationInfo {
     return {
       nodeId: isSet(object.nodeId) ? String(object.nodeId) : "",
-      visited: isSet(object.visited) ? Boolean(object.visited) : false,
+      visited: isSet(object.visited) ? Boolean(object.visited) : undefined,
     };
   },
 
-  toJSON(message: PoolMessagePackage_DestinationInfo): unknown {
+  toJSON(message: PoolMessagePackageDestinationInfo): unknown {
     const obj: any = {};
     message.nodeId !== undefined && (obj.nodeId = message.nodeId);
     message.visited !== undefined && (obj.visited = message.visited);
     return obj;
   },
 
-  fromPartial<I extends Exact<DeepPartial<PoolMessagePackage_DestinationInfo>, I>>(
+  fromPartial<I extends Exact<DeepPartial<PoolMessagePackageDestinationInfo>, I>>(
     object: I,
-  ): PoolMessagePackage_DestinationInfo {
-    const message = createBasePoolMessagePackage_DestinationInfo();
+  ): PoolMessagePackageDestinationInfo {
+    const message = createBasePoolMessagePackageDestinationInfo();
     message.nodeId = object.nodeId ?? "";
-    message.visited = object.visited ?? false;
+    message.visited = object.visited ?? undefined;
+    return message;
+  },
+};
+
+function createBasePoolChunkInfo(): PoolChunkInfo {
+  return { fileId: "", chunkNumber: 0 };
+}
+
+export const PoolChunkInfo = {
+  encode(message: PoolChunkInfo, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.fileId !== "") {
+      writer.uint32(10).string(message.fileId);
+    }
+    if (message.chunkNumber !== 0) {
+      writer.uint32(16).int64(message.chunkNumber);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): PoolChunkInfo {
+    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePoolChunkInfo();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          message.fileId = reader.string();
+          break;
+        case 2:
+          message.chunkNumber = longToNumber(reader.int64() as Long);
+          break;
+        default:
+          reader.skipType(tag & 7);
+          break;
+      }
+    }
+    return message;
+  },
+
+  fromJSON(object: any): PoolChunkInfo {
+    return {
+      fileId: isSet(object.fileId) ? String(object.fileId) : "",
+      chunkNumber: isSet(object.chunkNumber) ? Number(object.chunkNumber) : 0,
+    };
+  },
+
+  toJSON(message: PoolChunkInfo): unknown {
+    const obj: any = {};
+    message.fileId !== undefined && (obj.fileId = message.fileId);
+    message.chunkNumber !== undefined && (obj.chunkNumber = Math.round(message.chunkNumber));
+    return obj;
+  },
+
+  fromPartial<I extends Exact<DeepPartial<PoolChunkInfo>, I>>(object: I): PoolChunkInfo {
+    const message = createBasePoolChunkInfo();
+    message.fileId = object.fileId ?? "";
+    message.chunkNumber = object.chunkNumber ?? 0;
+    return message;
+  },
+};
+
+function createBasePoolMessagePackage(): PoolMessagePackage {
+  return { src: undefined, dests: [], partnerIntPath: undefined, msg: undefined, chunkInfo: undefined };
+}
+
+export const PoolMessagePackage = {
+  encode(message: PoolMessagePackage, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.src !== undefined) {
+      PoolMessagePackageSourceInfo.encode(message.src, writer.uint32(10).fork()).ldelim();
+    }
+    for (const v of message.dests) {
+      PoolMessagePackageDestinationInfo.encode(v!, writer.uint32(18).fork()).ldelim();
+    }
+    if (message.partnerIntPath !== undefined) {
+      writer.uint32(32).int32(message.partnerIntPath);
+    }
+    if (message.msg !== undefined) {
+      PoolMessage.encode(message.msg, writer.uint32(42).fork()).ldelim();
+    }
+    if (message.chunkInfo !== undefined) {
+      PoolChunkInfo.encode(message.chunkInfo, writer.uint32(50).fork()).ldelim();
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessagePackage {
+    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePoolMessagePackage();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          message.src = PoolMessagePackageSourceInfo.decode(reader, reader.uint32());
+          break;
+        case 2:
+          message.dests.push(PoolMessagePackageDestinationInfo.decode(reader, reader.uint32()));
+          break;
+        case 4:
+          message.partnerIntPath = reader.int32();
+          break;
+        case 5:
+          message.msg = PoolMessage.decode(reader, reader.uint32());
+          break;
+        case 6:
+          message.chunkInfo = PoolChunkInfo.decode(reader, reader.uint32());
+          break;
+        default:
+          reader.skipType(tag & 7);
+          break;
+      }
+    }
+    return message;
+  },
+
+  fromJSON(object: any): PoolMessagePackage {
+    return {
+      src: isSet(object.src) ? PoolMessagePackageSourceInfo.fromJSON(object.src) : undefined,
+      dests: Array.isArray(object?.dests)
+        ? object.dests.map((e: any) => PoolMessagePackageDestinationInfo.fromJSON(e))
+        : [],
+      partnerIntPath: isSet(object.partnerIntPath) ? Number(object.partnerIntPath) : undefined,
+      msg: isSet(object.msg) ? PoolMessage.fromJSON(object.msg) : undefined,
+      chunkInfo: isSet(object.chunkInfo) ? PoolChunkInfo.fromJSON(object.chunkInfo) : undefined,
+    };
+  },
+
+  toJSON(message: PoolMessagePackage): unknown {
+    const obj: any = {};
+    message.src !== undefined && (obj.src = message.src ? PoolMessagePackageSourceInfo.toJSON(message.src) : undefined);
+    if (message.dests) {
+      obj.dests = message.dests.map((e) => e ? PoolMessagePackageDestinationInfo.toJSON(e) : undefined);
+    } else {
+      obj.dests = [];
+    }
+    message.partnerIntPath !== undefined && (obj.partnerIntPath = Math.round(message.partnerIntPath));
+    message.msg !== undefined && (obj.msg = message.msg ? PoolMessage.toJSON(message.msg) : undefined);
+    message.chunkInfo !== undefined &&
+      (obj.chunkInfo = message.chunkInfo ? PoolChunkInfo.toJSON(message.chunkInfo) : undefined);
+    return obj;
+  },
+
+  fromPartial<I extends Exact<DeepPartial<PoolMessagePackage>, I>>(object: I): PoolMessagePackage {
+    const message = createBasePoolMessagePackage();
+    message.src = (object.src !== undefined && object.src !== null)
+      ? PoolMessagePackageSourceInfo.fromPartial(object.src)
+      : undefined;
+    message.dests = object.dests?.map((e) => PoolMessagePackageDestinationInfo.fromPartial(e)) || [];
+    message.partnerIntPath = object.partnerIntPath ?? undefined;
+    message.msg = (object.msg !== undefined && object.msg !== null) ? PoolMessage.fromPartial(object.msg) : undefined;
+    message.chunkInfo = (object.chunkInfo !== undefined && object.chunkInfo !== null)
+      ? PoolChunkInfo.fromPartial(object.chunkInfo)
+      : undefined;
+    return message;
+  },
+};
+
+function createBasePoolMessagePackageWithChunk(): PoolMessagePackageWithChunk {
+  return {
+    src: undefined,
+    dests: [],
+    partnerIntPath: undefined,
+    msg: undefined,
+    chunkInfo: undefined,
+    chunk: undefined,
+  };
+}
+
+export const PoolMessagePackageWithChunk = {
+  encode(message: PoolMessagePackageWithChunk, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.src !== undefined) {
+      PoolMessagePackageSourceInfo.encode(message.src, writer.uint32(10).fork()).ldelim();
+    }
+    for (const v of message.dests) {
+      PoolMessagePackageDestinationInfo.encode(v!, writer.uint32(18).fork()).ldelim();
+    }
+    if (message.partnerIntPath !== undefined) {
+      writer.uint32(32).int32(message.partnerIntPath);
+    }
+    if (message.msg !== undefined) {
+      PoolMessage.encode(message.msg, writer.uint32(42).fork()).ldelim();
+    }
+    if (message.chunkInfo !== undefined) {
+      PoolChunkInfo.encode(message.chunkInfo, writer.uint32(50).fork()).ldelim();
+    }
+    if (message.chunk !== undefined) {
+      writer.uint32(58).bytes(message.chunk);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessagePackageWithChunk {
+    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePoolMessagePackageWithChunk();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1:
+          message.src = PoolMessagePackageSourceInfo.decode(reader, reader.uint32());
+          break;
+        case 2:
+          message.dests.push(PoolMessagePackageDestinationInfo.decode(reader, reader.uint32()));
+          break;
+        case 4:
+          message.partnerIntPath = reader.int32();
+          break;
+        case 5:
+          message.msg = PoolMessage.decode(reader, reader.uint32());
+          break;
+        case 6:
+          message.chunkInfo = PoolChunkInfo.decode(reader, reader.uint32());
+          break;
+        case 7:
+          message.chunk = reader.bytes();
+          break;
+        default:
+          reader.skipType(tag & 7);
+          break;
+      }
+    }
+    return message;
+  },
+
+  fromJSON(object: any): PoolMessagePackageWithChunk {
+    return {
+      src: isSet(object.src) ? PoolMessagePackageSourceInfo.fromJSON(object.src) : undefined,
+      dests: Array.isArray(object?.dests)
+        ? object.dests.map((e: any) => PoolMessagePackageDestinationInfo.fromJSON(e))
+        : [],
+      partnerIntPath: isSet(object.partnerIntPath) ? Number(object.partnerIntPath) : undefined,
+      msg: isSet(object.msg) ? PoolMessage.fromJSON(object.msg) : undefined,
+      chunkInfo: isSet(object.chunkInfo) ? PoolChunkInfo.fromJSON(object.chunkInfo) : undefined,
+      chunk: isSet(object.chunk) ? bytesFromBase64(object.chunk) : undefined,
+    };
+  },
+
+  toJSON(message: PoolMessagePackageWithChunk): unknown {
+    const obj: any = {};
+    message.src !== undefined && (obj.src = message.src ? PoolMessagePackageSourceInfo.toJSON(message.src) : undefined);
+    if (message.dests) {
+      obj.dests = message.dests.map((e) => e ? PoolMessagePackageDestinationInfo.toJSON(e) : undefined);
+    } else {
+      obj.dests = [];
+    }
+    message.partnerIntPath !== undefined && (obj.partnerIntPath = Math.round(message.partnerIntPath));
+    message.msg !== undefined && (obj.msg = message.msg ? PoolMessage.toJSON(message.msg) : undefined);
+    message.chunkInfo !== undefined &&
+      (obj.chunkInfo = message.chunkInfo ? PoolChunkInfo.toJSON(message.chunkInfo) : undefined);
+    message.chunk !== undefined &&
+      (obj.chunk = message.chunk !== undefined ? base64FromBytes(message.chunk) : undefined);
+    return obj;
+  },
+
+  fromPartial<I extends Exact<DeepPartial<PoolMessagePackageWithChunk>, I>>(object: I): PoolMessagePackageWithChunk {
+    const message = createBasePoolMessagePackageWithChunk();
+    message.src = (object.src !== undefined && object.src !== null)
+      ? PoolMessagePackageSourceInfo.fromPartial(object.src)
+      : undefined;
+    message.dests = object.dests?.map((e) => PoolMessagePackageDestinationInfo.fromPartial(e)) || [];
+    message.partnerIntPath = object.partnerIntPath ?? undefined;
+    message.msg = (object.msg !== undefined && object.msg !== null) ? PoolMessage.fromPartial(object.msg) : undefined;
+    message.chunkInfo = (object.chunkInfo !== undefined && object.chunkInfo !== null)
+      ? PoolChunkInfo.fromPartial(object.chunkInfo)
+      : undefined;
+    message.chunk = object.chunk ?? undefined;
+    return message;
+  },
+};
+
+function createBasePoolMessagePackageWithOnlyChunk(): PoolMessagePackageWithOnlyChunk {
+  return { chunk: undefined };
+}
+
+export const PoolMessagePackageWithOnlyChunk = {
+  encode(message: PoolMessagePackageWithOnlyChunk, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
+    if (message.chunk !== undefined) {
+      writer.uint32(58).bytes(message.chunk);
+    }
+    return writer;
+  },
+
+  decode(input: _m0.Reader | Uint8Array, length?: number): PoolMessagePackageWithOnlyChunk {
+    const reader = input instanceof _m0.Reader ? input : new _m0.Reader(input);
+    let end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBasePoolMessagePackageWithOnlyChunk();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 7:
+          message.chunk = reader.bytes();
+          break;
+        default:
+          reader.skipType(tag & 7);
+          break;
+      }
+    }
+    return message;
+  },
+
+  fromJSON(object: any): PoolMessagePackageWithOnlyChunk {
+    return { chunk: isSet(object.chunk) ? bytesFromBase64(object.chunk) : undefined };
+  },
+
+  toJSON(message: PoolMessagePackageWithOnlyChunk): unknown {
+    const obj: any = {};
+    message.chunk !== undefined &&
+      (obj.chunk = message.chunk !== undefined ? base64FromBytes(message.chunk) : undefined);
+    return obj;
+  },
+
+  fromPartial<I extends Exact<DeepPartial<PoolMessagePackageWithOnlyChunk>, I>>(
+    object: I,
+  ): PoolMessagePackageWithOnlyChunk {
+    const message = createBasePoolMessagePackageWithOnlyChunk();
+    message.chunk = object.chunk ?? undefined;
     return message;
   },
 };

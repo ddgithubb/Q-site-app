@@ -4,7 +4,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PoolConnectionState, PoolInfo, PoolNode } from '../../pool/pool.model';
 import { getStoreState, GlobalState, store } from '../../store/store';
 import { motion } from 'framer-motion';
-import { mebibytesToBytes } from '../../helpers/file-size';
+import { mebibytesToBytes } from '../../utils/file-size';
 import { PoolManager } from '../../pool/global';
 import { PoolMessagesView } from './PoolMessagesView';
 import { isMobile } from 'react-device-detect';
@@ -103,8 +103,8 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
     const pool = useSelector((state: GlobalState) => state.pool.pools.at(poolKey));
     const navigate = useNavigate();
     const userMap = useMemo<UserMapType>(() => {
-        if (!pool) return new Map<string, PoolUserActiveDevices>;
-        let userMap = new Map<string, PoolUserActiveDevices>;
+        if (!pool) return new Map<string, PoolUserActiveDevices>();
+        let userMap = new Map<string, PoolUserActiveDevices>();
         for (const user of pool.users) {
             let userAndDevices: PoolUserActiveDevices = {
                 user: user,
@@ -116,7 +116,7 @@ export function PoolView({ poolID, poolKey }: { poolID: string, poolKey: number 
             let userAndDevices = userMap.get(activeNode.userID);
             if (!userAndDevices) continue;
             if (!userAndDevices.activeDevices) {
-                userAndDevices.activeDevices = new Map<String, PoolNode>;
+                userAndDevices.activeDevices = new Map<String, PoolNode>();
             }
             userAndDevices.activeDevices.set(activeNode.deviceID, activeNode);
         }

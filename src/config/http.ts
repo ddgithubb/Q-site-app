@@ -1,7 +1,7 @@
 import * as FD from "form-data";
 import { PRODUCTION_MODE } from "./env";
 
-const SYNC_SERVER_TEST_DOMAIN: string = "192.168.1.140:80";
+const SYNC_SERVER_TEST_DOMAIN: string = "192.168.0.18:80";
 const SYNC_SERVER_PROD_DOMAIN: string = "ec2-99-79-191-205.ca-central-1.compute.amazonaws.com";
 const SYNC_SERVER_IS_SECURE: boolean = false;
 const SYNC_SERVER_VERSION: string = "v1";

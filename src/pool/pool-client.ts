@@ -1,22 +1,23 @@
 // import { SSNodeStatusData, SSReportCodes, SSReportNodeData, SSSDPData, SSStatus, SSMessage, SSAddNodesData, SSRemoveNodeData } from "./sync-server.model";
 // import { PoolNodeState, Pool, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolMessageAction, PoolUpdateNodeState, PoolFileRequest, PoolMessageSourceInfo, PoolMessageDestinationInfo, MESSAGE_ID_LENGTH, FILE_ID_LENGTH, PoolChunkRange, PoolImageOffer, PoolDownloadProgressStatus, PoolRequestMediaHint, PoolMessage, PoolRemoveFileRequest, PoolRetractFileOffer, PoolFileInfo, PoolFileOffer, PoolFileSeeders } from "./pool.model";
 import { getStoreState, store } from "../store/store";
-import { AddActiveNodeAction, AddDownloadAction, AddFileOfferAction, AddMessageAction, PoolAction, poolAction, RemoveActiveNodeAction, RemoveFileOfferAction, RemoveUserAction, ResetPoolAction, UpdateDownloadProgressStatusAction, UpdateUserAction } from "../store/slices/pool.slice";
+import { AddActiveNodeAction, AddDownloadAction, AddFileOfferAction, AddMessageAction, PoolAction, poolAction, RemoveActiveNodeAction, RemoveFileOfferAction, RemoveUserAction, ResetPoolAction, UpdateUserAction } from "../store/slices/pool.slice";
 import { CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR, CHUNK_SIZE, DEFAULT_RECV_MESSAGES_CACHE, MAXIMUM_GET_LATEST_MESSAGE_LENGTH } from "../config/caching";
 import { nanoid } from "nanoid";
-import { createBinaryMessage, parseBinaryMessage, setBinaryMessageDestVisited } from "./pool-binary-message";
+// import { createBinaryMessage, parseBinaryMessage, setBinaryMessageDestVisited } from "./pool-binary-message";
 import { FileManager, PoolManager } from "./global";
 import { reportNodeDisconnect } from "./sync-server-client";
-import { compactChunkRanges, getCacheChunkNumberFromByteSize, getCacheChunkNumberFromChunkNumber, searchPosInCacheChunkMapData } from "./pool-chunks";
-import { CacheChunkData, CacheChunkMapData, PoolFile } from "./pool-file-manager";
-import { mebibytesToBytes } from "../helpers/file-size";
+import { calcChunkRangesDifference, compactChunkRanges, existsInChunkRanges, getPartnerIntFromCacheChunkNumber, getCacheChunkNumberFromByteSize, getCacheChunkNumberFromChunkNumber, getChunkNumberFromCacheChunkNumber, inChunkRange, mapPromisedChunks, calcChunkRangesIntersection, addToChunkRanges } from "./pool-chunks";
+import { CacheChunkData, PoolFile } from "./pool-file-manager";
+import { mebibytesToBytes } from "../utils/file-size";
 import EventEmitter from "events";
 import { Image } from 'image-js';
-import { checkFileExist } from "../helpers/file-exists";
+import { checkFileExist } from "../utils/file-exists";
 import { profileAction, ProfileState } from "../store/slices/profile.slice";
 import { SSMessage_AddNodeData, SSMessage_InitPoolData, SSMessage_RemoveNodeData, SSMessage_RemoveUserData, SSMessage_UpdateUserData } from "./sync_server.v1";
-import { PoolFileChunkMessage, PoolFileSeeders, PoolMessage, PoolMessagePackage, PoolMessagePackage_DestinationInfo, PoolMessagePackage_SourceInfo, PoolMessage_FileOfferData, PoolMessage_FileRequestData, PoolMessage_LatestRequestData, PoolMessage_NodeStateData, PoolMessage_Type, PoolNodeState } from "./pool.v1";
-import { MESSAGE_ID_LENGTH, Pool, PoolNode } from "./pool.model";
+import { PoolChunkInfo, PoolChunkRange, PoolFileInfo, PoolFileSeeders, PoolImageData, PoolMediaType, PoolMessage, PoolMessagePackage, PoolMessagePackageDestinationInfo, PoolMessagePackageSourceInfo, PoolMessagePackageWithChunk, PoolMessagePackageWithOnlyChunk, PoolFileOffer, PoolMessage_FileRequestData, PoolMessage_LatestReplyData, PoolMessage_LatestRequestData, PoolMessage_MediaHintReplyData, PoolMessage_MediaHintRequestData, PoolMessage_NodeStateData, PoolMessage_RetractFileRequestData, PoolMessage_Type, PoolNodeState } from "./pool.v1";
+import { FILE_ID_LENGTH, MESSAGE_ID_LENGTH, Pool, PoolDownloadProgressStatus, PoolNode } from "./pool.model";
+import { setMessagePackageDestVisited } from "./pool.v1.hacks";
 
 const MAXIMUM_DC_BUFFER_SIZE = mebibytesToBytes(15);
 const PREVIEW_IMAGE_DIMENSION = 10;
@@ -52,20 +53,35 @@ interface OngoingFileRequest {
     wrappedAround: boolean;
     nextChunkNumber: number;
     chunksMissingRangeNumber: number;
-    cacheChunksSet: Set<number>;
+    promisedChunksMap: Map<number, PoolChunkRange[]>; // key: cacheChunkNumber
     cancelled: boolean;
 }
 
-interface PoolAvailableFile {
-    fileSeeders: PoolFileSeeders;
-    lastRequestedNodeID: string;
-    lastProgress: number;
-    retryCount: number;
-}
+// interface PoolAvailableFile {
+//     fileSeeders: PoolFileSeeders;
+//     lastRequestedNodeID: string;
+//     lastProgress: number;
+//     retryCount: number;
+// }
 
 interface PoolMessageInfo {
     msgID: string;
     created: number;
+}
+
+interface PoolMessagePackageBundle {
+    msgPkg: PoolMessagePackage;
+    encodedMsgPkg: Uint8Array;
+}
+
+interface PoolCacheRequestInfo {
+    requestingNodeID: string;
+    requestedChunkRanges: PoolChunkRange[];
+}
+
+interface PoolCacheInfo {
+    key: string; // only for browser, see CacheChunkData
+    cacheChunkNumber: number;
 }
 
 enum MessageDirection {
@@ -82,18 +98,17 @@ export class PoolClient {
     nodeID: string;
     nodePosition: PoolNodePosition;
     nodeConnections: Map<string, PoolNodeConnection>;
-    lastPromoted: number;
     reconnect: boolean;
     new: boolean;
     isOnlyNode: boolean;
+    missedMessages: PoolMessage[];
     receivedMessages: PoolMessageInfo[];
     activeNodes: Map<string, number[]>; // key: nodeID, value: lastSeenPath
-    availableFiles: Map<string, PoolAvailableFile>; // key: fileID, value: availableFile
-    mediaHinterNodeIDs: Map<string, string[]>; // key: fileID, value: hinterNodeIDs
-    curFileRequests: Map<string, OngoingFileRequest[]>;
+    availablefileSeeders: Map<string, PoolFileSeeders>; // key: fileID, value: availableFile
+    curFileRequests: Map<string, OngoingFileRequest[]>; // key: fileID
     sendingCache: boolean;
-    sendCacheMap: Map<string, string[]>; // key: cacheChunkKey // value: dests 
-    sendCacheQueue: CacheChunkData[]; // value: cacheChunkKey
+    sendCacheRequestInfo: Map<string, PoolCacheRequestInfo[]>; // key: cacheChunkKey (In desktop, should be just fileID+cacheChunkNumber), value: CacheRequestInfos
+    sendCacheQueue: PoolCacheInfo[]; // value: PoolCacheInfo
     maxDCBufferQueueLength: number;
     curDCBufferQueueLength: number;
     DCBufferQueues: Uint8Array[][]; // size: 15
@@ -107,17 +122,16 @@ export class PoolClient {
         this.nodeID = "";
         this.nodePosition = {} as PoolNodePosition;
         this.nodeConnections = new Map<string, PoolNodeConnection>();
-        this.lastPromoted = Date.now();
         this.reconnect = true;
         this.isOnlyNode = false;
         this.new = true;
+        this.missedMessages = [];
         this.receivedMessages = [];
-        this.activeNodes = new Map<string, number[]>;
-        this.availableFiles = new Map<string, PoolAvailableFile>;
-        this.mediaHinterNodeIDs = new Map<string, string[]>;
-        this.curFileRequests = new Map<string, OngoingFileRequest[]>;
+        this.activeNodes = new Map<string, number[]>();
+        this.availablefileSeeders = new Map<string, PoolFileSeeders>();
+        this.curFileRequests = new Map<string, OngoingFileRequest[]>();
         this.sendingCache = false;
-        this.sendCacheMap = new Map<string, string[]>;
+        this.sendCacheRequestInfo = new Map<string, PoolCacheRequestInfo[]>();
         this.sendCacheQueue = [];
         this.maxDCBufferQueueLength = store.getState().setting.storageSettings.maxSendBufferSize / CHUNK_SIZE;
         this.curDCBufferQueueLength = 0;
@@ -160,13 +174,14 @@ export class PoolClient {
             }
         });
         this.nodeConnections.clear();
-        this.availableFiles.clear();
+        this.availablefileSeeders.clear();
         this.curFileRequests.clear();
 
         if (!this.reconnect) {
             let dq = this.getPool().downloadQueue;
             for (let i = 0; i < dq.length; i++) {
-                FileManager.completeFileDownload(dq[i].fileID);
+                if (!dq[i].fileInfo) continue;
+                FileManager.completeFileDownload(dq[i].fileInfo!.fileId);
             }
             store.dispatch(poolAction.clearPool({
                 key: this.poolKey,
@@ -198,9 +213,9 @@ export class PoolClient {
     ////////////////////////////////////////////////////////////////
 
     updateNodePosition(nodePosition: PoolNodePosition) {
+        // let isPromoting = this.nodePosition.path && this.nodePosition.path.length != nodePosition.path.length;
         this.nodePosition = nodePosition;
         console.log("Node position", this.nodePosition);
-        this.lastPromoted = Date.now();
         this.checkForUneededBufferQueues();
         this.updateIsOnlyNode();
     }
@@ -384,7 +399,7 @@ export class PoolClient {
         for (const fileOfferData of fileOffersData) {
             this.addAvailableFileOffer({
                 ...fileOfferData,
-                seederNodeID: this.nodeID,
+                seederNodeId: this.nodeID,
             });
         }
 
@@ -402,7 +417,7 @@ export class PoolClient {
             nodeID: addNodeData.nodeId,
             userID: addNodeData.userId,
             deviceID: addNodeData.deviceId,
-            fileOffers: [],
+            fileOffersInfo: [],
         };
 
         this.activeNodes.set(addNodeData.nodeId, addNodeData.path);
@@ -412,16 +427,15 @@ export class PoolClient {
         } as AddActiveNodeAction));
 
         if (addAsMessage) {
-            let nodeState: PoolMessage_NodeStateData = {
+            let msg: PoolMessage = this.createNewMessage(
+                PoolMessage_Type.NODE_STATE,
+                this.createNodeStateMsgID(addNodeData.nodeId, addNodeData.timestamp, PoolNodeState.ACTIVE),
+            );
+            msg.nodeStateData = {
                 nodeId: poolNode.nodeID,
                 userId: poolNode.userID,
                 state: PoolNodeState.ACTIVE,
             };
-            let msg: PoolMessage = this.createNewMessage(
-                PoolMessage_Type.NODE_STATE, 
-                nodeState, 
-                this.createNodeStateMsgID(addNodeData.nodeId, addNodeData.timestamp, PoolNodeState.ACTIVE),
-            );
             msg.created = addNodeData.timestamp;
             this.addAndCheckMessage(msg);
         }
@@ -441,8 +455,8 @@ export class PoolClient {
         }
         if (!existingNode) return;
 
-        for (let i = 0; i < existingNode.fileOffers.length; i++) {
-            this.removeAvailableFileOffer(existingNode.fileOffers[i].fileID, nodeID);
+        for (let i = 0; i < existingNode.fileOffersInfo.length; i++) {
+            this.removeAvailableFileOffer(existingNode.fileOffersInfo[i].fileId, nodeID);
         }
 
         store.dispatch(poolAction.removeActiveNode({
@@ -450,17 +464,15 @@ export class PoolClient {
             nodeID: nodeID,
         } as RemoveActiveNodeAction));
 
-        let nodeState: PoolMessage_NodeStateData = {
+        let msg: PoolMessage = this.createNewMessage(
+            PoolMessage_Type.NODE_STATE, 
+            this.createNodeStateMsgID(nodeID, removeNodeData.timestamp, PoolNodeState.INACTIVE),
+        );
+        msg.nodeStateData = {
             nodeId: nodeID,
             userId: existingNode.userID,
             state: PoolNodeState.INACTIVE,
         };
-
-        let msg: PoolMessage = this.createNewMessage(
-            PoolMessage_Type.NODE_STATE, 
-            nodeState, 
-            this.createNodeStateMsgID(nodeID, removeNodeData.timestamp, PoolNodeState.INACTIVE),
-        );
         msg.created = removeNodeData.timestamp;
         this.addAndCheckMessage(msg);
         
@@ -490,20 +502,13 @@ export class PoolClient {
     ////////////////////////////////////////////////////////////////
 
     sendLatestRequest(nodeID: string) {
-        let pool = this.getPool();
         let lastMessageID: string = "";
         let missedMessages: PoolMessage[] = [];
         if (!this.new) {
-            for (let i = pool.messages.length - 1; i >= 0; i--) {
-                if (pool.messages[i].received != undefined && pool.messages[i].received! < this.lastPromoted) {
-                    lastMessageID = pool.messages[i].msgID; 
-                    break;
-                } else {
-                    missedMessages.push(pool.messages[i]);
-                }
-            }
+            console.log("Sending missed messages", this.missedMessages);
+            missedMessages = this.missedMessages;
         }
-        let initFileOffers: PoolMessage_FileOfferData[] = [];
+        let initFileOffers: PoolFileOffer[] = [];
         if (this.new) {
             let files: PoolFile[] = FileManager.getFileOffers(this.poolID) || [];
             for (const file of files) {
@@ -513,84 +518,99 @@ export class PoolClient {
                 });
             }
         }
-        let latestRequestData: PoolMessage_LatestRequestData = {
+
+        let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.LATEST_REQUEST);
+        msg.latestRequestData = {
             messagesOnly: this.new ? false : true,
             lastMessageId: lastMessageID,
             missedMessages: missedMessages,
             initFileOffers: initFileOffers,
         }
-        this.sendDataChannel(nodeID, JSON.stringify(
-            this.createMessagePackage(
-                PoolMessageType.GET_LATEST, 
-                PoolMessageAction.REQUEST, 
-                latestRequestData, 
-                nodeID
-            )
-        ));
+
+        this.sendDataChannel(nodeID, this.createMessagePackageBundle(msg, nodeID));
     }
 
-    sendRespondGetLatest(nodeID: string, latestRequest: PoolUpdateLatestInfo) {
+    sendLatestReply(fromNodeID: string, latestRequest: PoolMessage_LatestRequestData) {
         let pool = this.getPool();
         let messagesOnly = latestRequest.messagesOnly;
-        let lastMessageID = latestRequest.lastMessageID;
+        let lastMessageID = latestRequest.lastMessageId;
 
-        if (lastMessageID != "") {
-            this.addMessages(latestRequest.messages);
+        if (lastMessageID != "" && latestRequest.missedMessages.length != 0) {
+            console.log("Received missed messages:", latestRequest.missedMessages);
+            for (const message of latestRequest.missedMessages) {
+                // The reason for this is due to how missed messages work
+                // Missed messages only send to one of the neighbouring nodes
+                // Regardless, if they are missed, it is posible that everyone missed it
+                this.handleMessage(this.createMessagePackageBundle(message));
+            }
+            // this.addMessages(latestRequest.missedMessages);
         }
 
-        for (const fileOfferAndSeeders of latestRequest.fileSeeders) {
-            this.addAvailableFileOfferAndSeeders(fileOfferAndSeeders);
+        for (const fileOffer of latestRequest.initFileOffers) {
+            this.addAvailableFileOffer(fileOffer);
         }
 
-        let fileOffersAndSeeders: PoolFileSeeders[] = [];
-        this.availableFiles.forEach((availFile) => {
-            fileOffersAndSeeders.push(availFile.fileSeeders);
-        });
+        let messages: PoolMessage[] = [];
+        let lastMessageIdFound: boolean = true;
+        let fileSeeders: PoolFileSeeders[] = [];
 
-        let latest: PoolUpdateLatestInfo = {
-            messagesOnly: messagesOnly,
-            lastMessageID: lastMessageID,
-            fileSeeders: fileOffersAndSeeders,
-            messages: [],
+        if (!messagesOnly) {
+            this.availablefileSeeders.forEach((seeders) => {
+                fileSeeders.push(seeders);
+            });
         }
         
         if (lastMessageID == "") {
-            latest.messages = pool.messages.slice(-MAXIMUM_GET_LATEST_MESSAGE_LENGTH);
+            messages = pool.messages.slice(-MAXIMUM_GET_LATEST_MESSAGE_LENGTH);
         } else {
             let i = pool.messages.length - 1;
             for (; i >= 0; i--) {
-                if (pool.messages[i].msgID == lastMessageID) {
+                if (pool.messages[i].msgId == lastMessageID) {
                     break;
                 }
             }
             if (i == -1) {
-                latest.lastMessageID = "";
-                latest.messages = pool.messages;
+                lastMessageIdFound = false;
+                messages = pool.messages;
             } else {
-                latest.messages = pool.messages.slice(i + 1);
+                messages = pool.messages.slice(i + 1);
             }
         }
-        //console.log(correctedActiveNodes);
-        this.sendDataChannel(nodeID, JSON.stringify(this.createMessagePackage(PoolMessageType.GET_LATEST, PoolMessageAction.REPLY, latest, nodeID)))
+
+        let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.LATEST_REPLY);
+        msg.latestReplyData = {
+            messages,
+            fileSeeders,
+            lastMessageIdFound,
+        }
+        this.sendDataChannel(fromNodeID, this.createMessagePackageBundle(msg, fromNodeID));
     }
 
     sendTextMessage(text: string) {
+        text = text.trim()
         if (text == "" || text.length >= this.getPool().poolSettings.maxTextLength || text.replaceAll(" ", "").replaceAll("&nbsp;", "").replaceAll("<br>", "") == "") {
             return;
         }
-        this.handleMessage(this.createMessagePackage(PoolMessageType.TEXT, PoolMessageAction.DEFAULT, text.trim()));
+        let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.TEXT);
+        msg.textData = {
+            text,
+        }
+        this.handleMessage(this.createMessagePackageBundle(msg));
     }
 
     sendFileOffer(file: File, fileID: string = nanoid(FILE_ID_LENGTH), originNodeID: string = this.nodeID) {
-        let fileOffer: PoolFileOffer = {
-            fileID: fileID,
-            seederNodeID: this.nodeID,
-            originNodeID: originNodeID,
-            fileName: file.name,
-            totalSize: file.size,
-        };
-        if (!FileManager.addFileOffer(this.poolID, fileOffer, file)) return;
-        this.handleMessage(this.createMessagePackage(PoolMessageType.FILE_OFFER, PoolMessageAction.DEFAULT, fileOffer));
+        let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.FILE_OFFER);
+        msg.fileOfferData = {
+            fileInfo: {
+                fileId: fileID,
+                fileName: file.name,
+                totalSize: file.size,
+                originNodeId: originNodeID,
+            },
+            seederNodeId: this.nodeID,
+        }
+        if (!FileManager.addFileOffer(this.poolID, msg.fileOfferData.fileInfo!, file)) return;
+        this.handleMessage(this.createMessagePackageBundle(msg));
     }
     
     async sendImageOffer(file: File) {
@@ -612,295 +632,351 @@ export class PoolClient {
                 height: PREVIEW_IMAGE_DIMENSION,
             })
         }
-        let previewImage = "data:image/" + format + ";base64," + await image.toBase64();
-        let imageOffer: PoolImageOffer = {
-            fileID: fileID,
-            seederNodeID: this.nodeID,
-            originNodeID: this.nodeID,
-            fileName: file.name,
-            totalSize: file.size,
-            extension: format,
-            width: width,
-            height: height,
-            previewImage: previewImage,
+        let previewImageBase64 = "data:image/" + format + ";base64," + await image.toBase64();
+        let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.MEDIA_OFFER);
+        msg.mediaOfferData = {
+            fileOffer: {
+                fileInfo: {
+                    fileId: fileID,
+                    fileName: file.name,
+                    totalSize: file.size,
+                    originNodeId: this.nodeID,
+                },
+                seederNodeId: this.nodeID,
+            },
+            mediaType: PoolMediaType.IMAGE,
+            format,
+            imageData: {
+                width,
+                height,
+                previewImageBase64,
+            }
         }
-        if (!FileManager.addFileOffer(this.poolID, imageOffer, file)) return;
+        if (!FileManager.addFileOffer(this.poolID, msg.mediaOfferData!.fileOffer!.fileInfo!, file)) return;
         FileManager.addMediaCache(fileID, file);
-        this.handleMessage(this.createMessagePackage(PoolMessageType.IMAGE_OFFER, PoolMessageAction.DEFAULT, imageOffer));
+        this.handleMessage(this.createMessagePackageBundle(msg));
         this.sendMedia(fileID);
     }
 
-    async sendRequestFile(fileInfo: PoolFileInfo, isMedia: boolean, chunksMissing?: PoolChunkRange[], hinterNodeID?: string) {
-        if (FileManager.hasFileOffer(this.poolID, fileInfo.fileID)) {
-            let exists = await this.validateFileOffer(fileInfo.fileID);
+    async sendFileRequest(fileInfo: PoolFileInfo, isMedia: boolean, chunksMissing?: PoolChunkRange[], hinterNodeID?: string) {
+        let fileID = fileInfo.fileId;
+
+        if (FileManager.hasFileOffer(this.poolID, fileID)) {
+            let exists = await this.validateFileOffer(fileID);
             if (exists) return;
         }
 
-        //console.log(FileManager.hasFileDownload(fileInfo.fileID), chunksMissing, hinterNodeID);
-        if (!FileManager.hasFileDownload(fileInfo.fileID)) {
+        //console.log(FileManager.hasFileDownload(fileID), chunksMissing, hinterNodeID);
+        if (!FileManager.hasFileDownload(fileID)) {
             if (!(await FileManager.addFileDownload(this.poolID, this.poolKey, fileInfo, isMedia))) return;
-            let addDownloadAction: AddDownloadAction = {
-                key: this.poolKey,
-                fileInfo: fileInfo,
-            };
-            store.dispatch(poolAction.addDownload(addDownloadAction));
-        } else if (!chunksMissing  && !hinterNodeID) return;
+        } else if (!chunksMissing && !hinterNodeID) return;
 
 
-        let availableFile = this.availableFiles.get(fileInfo.fileID);
+        let fileDownload = FileManager.getFileDownload(fileID)!;
+        let fileSeeders = this.availablefileSeeders.get(fileID);
         
-        //console.log(availableFile, fileInfo.fileID);
+        //console.log(availableFile, fileID);
         let requestNodeID = "";
-        if (availableFile) {
-            let seederNodeIDs = availableFile.fileSeeders.seederNodeIDs;
-            if (seederNodeIDs.length == 1) {
-                requestNodeID = seederNodeIDs[0];
-            } else {
-                let minimumDist = Infinity;
-                for (let i = 0; i < seederNodeIDs.length; i++) {
-                    let lsp = this.activeNodes.get(seederNodeIDs[i]);
-                    if (!lsp) continue;
-                    let dist = this.getDistanceTo(lsp);
-                    if (dist < minimumDist) {
-                        requestNodeID = seederNodeIDs[i];
-                        minimumDist = dist;
+        if (fileSeeders) {
+
+            let seederNodeIDs = fileSeeders.seederNodeIds;
+            seederNodeIDs.sort((a, b) => {
+                let lspA = this.activeNodes.get(a);
+                let lspB = this.activeNodes.get(b);
+                if (!lspA || !lspB) return 0; // shouldn't be logically possible
+                return this.getDistanceTo(lspA) - this.getDistanceTo(lspB);
+            });
+
+            if (fileDownload.lastRequestedNodeID != "") {
+                if (fileDownload.retryCount > MAX_FILE_REQUEST_RETRY) {
+                    let index = seederNodeIDs.indexOf(fileDownload.lastRequestedNodeID);
+                    index++;
+                    if (index >= seederNodeIDs.length) {
+                        index = 0;
                     }
-                }
-            }
-
-            if (requestNodeID != "") {
-                if (requestNodeID == availableFile.lastRequestedNodeID && availableFile.retryCount > MAX_FILE_REQUEST_RETRY) {
-                    // let updateDownloadStatusAction: UpdateDownloadProgressStatusAction = {
-                    //     key: this.poolKey,
-                    //     fileID: fileInfo.fileID,
-                    //     seederNodeID: requestNodeID,
-                    //     status: PoolDownloadProgressStatus.RETRYING,
-                    // };
-                    // store.dispatch(poolAction.updateDownloadProgressStatus(updateDownloadStatusAction));
-                    FileManager.setFileDownloadStatus(fileInfo.fileID, PoolDownloadProgressStatus.RETRYING);
-
-                    this.removeAvailableFileOffer(fileInfo.fileID, requestNodeID);
-                    this.sendRequestFile(fileInfo, isMedia, chunksMissing);
-                    return;
-                }
-    
-                let progress = FileManager.getFileDownloadProgress(fileInfo.fileID);
-                if (availableFile.lastRequestedNodeID == requestNodeID && availableFile.lastProgress == progress) {
-                    availableFile.retryCount++;
+                    requestNodeID = seederNodeIDs[index];
+                    fileDownload.retryCount = 0;
                 } else {
-                    availableFile.retryCount = 0;
+                    requestNodeID = fileDownload.lastRequestedNodeID;
                 }
-                
-                availableFile.lastRequestedNodeID = requestNodeID;
-                availableFile.lastProgress = progress;
+            } else {
+                requestNodeID = seederNodeIDs[0];
             }
+
+            let progress = FileManager.getFileDownloadProgress(fileID);
+            if (fileDownload.lastRequestedNodeID == requestNodeID && fileDownload.lastProgress == progress) {
+                fileDownload.retryCount++;
+            } else {
+                fileDownload.retryCount = 0;
+            }
+
+            fileDownload.lastRequestedNodeID = requestNodeID;
+            fileDownload.lastProgress = progress;
+
         }
 
         if (isMedia && requestNodeID == "") {
-            let nodeIDs = this.mediaHinterNodeIDs.get(fileInfo.fileID);
+
+            let hinterNodeIDs = fileDownload.hinterNodeIDs;
             //console.log(nodeIDs);
-            if (!hinterNodeID && nodeIDs) {
-                if (nodeIDs.length == 0 || nodeIDs.length == 1) { // no response from hints, should remove from queue to prevent sending automatic hints again 
-                    this.mediaHinterNodeIDs.delete(fileInfo.fileID);
-                    FileManager.completeFileDownload(fileInfo.fileID);
+            if (!hinterNodeID && hinterNodeIDs) {
+                if (hinterNodeIDs.length == 0 || hinterNodeIDs.length == 1) { // No response from hints, should remove from queue to prevent sending automatic hints again 
+                    // this.mediaHinterNodeIDs.delete(fileID);
+                    FileManager.completeFileDownload(fileID);
                     return;
                 }
-                nodeIDs.splice(0, 1);
+                hinterNodeIDs.splice(0, 1);
             }
-            if (!nodeIDs) {
-                nodeIDs = [];
-                this.mediaHinterNodeIDs.set(fileInfo.fileID, nodeIDs);
+
+            if (!hinterNodeIDs) {
+                hinterNodeIDs = [];
+                fileDownload.hinterNodeIDs = hinterNodeIDs;
             }
+
             if (hinterNodeID) {
-                nodeIDs.push(hinterNodeID);
-                if (nodeIDs.length != 1) return;
+                hinterNodeIDs.push(hinterNodeID);
+                if (hinterNodeIDs.length != 1) return;
             }
-            if (nodeIDs.length > 0) {
-                requestNodeID = nodeIDs[0];
+
+            if (hinterNodeIDs.length > 0) {
+                requestNodeID = hinterNodeIDs[0];
             }
+
         }
 
         if (requestNodeID != "") {
-            // let updateDownloadStatusAction: UpdateDownloadProgressStatusAction = {
-            //     key: this.poolKey,
-            //     fileID: fileInfo.fileID,
-            //     seederNodeID: requestNodeID,
-            //     status: PoolDownloadProgressStatus.DOWNLOADING,
-            // };
-            // store.dispatch(poolAction.updateDownloadProgressStatus(updateDownloadStatusAction));
-            FileManager.setFileDownloadStatus(fileInfo.fileID, PoolDownloadProgressStatus.DOWNLOADING);
 
+            fileDownload.status = chunksMissing ? PoolDownloadProgressStatus.RETRYING : PoolDownloadProgressStatus.DOWNLOADING;
+            store.dispatch(poolAction.updateDownloadSeederNodeID({
+                key: this.poolKey,
+                fileID: fileID,
+                seederNodeID: requestNodeID,
+            }));
 
-            let fileRequest: PoolFileRequest = {
-                fileID: fileInfo.fileID,
-                requestingNodeID: this.nodeID,
+            let fileRequest: PoolMessage_FileRequestData = {
+                fileId: fileID,
+                requestingNodeId: this.nodeID,
                 chunksMissing: chunksMissing || [],
-                cacheChunksCovered: [],
+                promisedChunks: [],
             };
 
-            if (FileManager.hasMediaCache(fileInfo.fileID)) {
+            if (FileManager.hasMediaCache(fileID)) {
                 this.sendFile(fileRequest);
             } else {
                 for (let i = 0; i < 3; i++) {
-                    this.handleMessage(this.createMessagePackage(PoolMessageType.FILE_OFFER, PoolMessageAction.REQUEST, fileRequest, requestNodeID, i));
+                    let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.FILE_REQUEST);
+                    msg.fileRequestData = fileRequest;
+                    fileRequest.promisedChunks = [];
+                    this.handleMessage(this.createMessagePackageBundle(msg, requestNodeID, i));
                 }
             }
+
         } else {
-            //FileManager.completeFileDownload(fileInfo.fileID);
-            // let updateDownloadStatusAction: UpdateDownloadProgressStatusAction = {
-            //     key: this.poolKey,
-            //     fileID: fileInfo.fileID,
-            //     seederNodeID: "",
-            //     status: PoolDownloadProgressStatus.UNAVAILABLE,
-            // };
-            // store.dispatch(poolAction.updateDownloadProgressStatus(updateDownloadStatusAction));
-            FileManager.setFileDownloadStatus(fileInfo.fileID, PoolDownloadProgressStatus.UNAVAILABLE);
+            
+            fileDownload.status = PoolDownloadProgressStatus.UNAVAILABLE;
+            store.dispatch(poolAction.updateDownloadSeederNodeID({
+                key: this.poolKey,
+                fileID: fileID,
+                seederNodeID: "",
+            }));
+
             if (isMedia) {
-                this.sendDefaultMediaHint(fileInfo);
+                this.sendMediaHintRequest(fileInfo);
             }
+
         }
     }
 
-    sendDefaultMediaHint(fileInfo: PoolFileInfo) {
-        let requestingHintData: PoolRequestMediaHint = {
-            fileInfo: fileInfo,
-        };
-        this.handleMessage(this.createMessagePackage(PoolMessageType.REQUEST_MEDIA_HINT, PoolMessageAction.DEFAULT, requestingHintData));
+    sendMediaHintRequest(fileInfo: PoolFileInfo) {
+        let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.MEDIA_HINT_REQUEST);
+        msg.mediaHintRequestData = {
+            fileId: fileInfo.fileId,
+        }
+        this.handleMessage(this.createMessagePackageBundle(msg));
     }
 
-    sendReplyMediaHint(originNodeID: string, requestingHintData: PoolRequestMediaHint) {
-        if (!FileManager.hasMediaCache(requestingHintData.fileInfo.fileID)) return;
-        this.handleMessage(this.createMessagePackage(PoolMessageType.REQUEST_MEDIA_HINT, PoolMessageAction.REPLY, requestingHintData, originNodeID));
+    sendMediaHintReply(originNodeID: string, mediaHintRequest: PoolMessage_MediaHintRequestData) {
+        if (!FileManager.hasMediaCache(mediaHintRequest.fileId)) return;
+        let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.MEDIA_HINT_REPLY);
+        msg.mediaHintReplyData = {
+            fileId: mediaHintRequest.fileId,
+        }
+        this.handleMessage(this.createMessagePackageBundle(msg, originNodeID));
     }
 
-    sendRequestMediaFromHint(hinterNodeID: string, requestingHintData: PoolRequestMediaHint) {
-        if (!FileManager.hasFileDownload(requestingHintData.fileInfo.fileID)) return;
-        this.sendRequestFile(requestingHintData.fileInfo, true, undefined, hinterNodeID);
+    sendMediaRequestFromHintReply(hinterNodeID: string, mediaHintReply: PoolMessage_MediaHintReplyData) {
+        let fileInfo = FileManager.getFileDownloadInfo(mediaHintReply.fileId);
+        if (!fileInfo) return;
+        this.sendFileRequest(fileInfo, true, undefined, hinterNodeID);
     }
 
     sendRetractFileOffer(fileID: string) {
         if (!FileManager.hasFileOffer(this.poolID, fileID)) return;
         FileManager.removeFileOffer(this.poolID, fileID);
-        let retractFileOfferData: PoolRetractFileOffer = { fileID, nodeID: this.nodeID };
-        this.handleMessage(this.createMessagePackage(PoolMessageType.RETRACT_FILE_OFFER, PoolMessageAction.DEFAULT, retractFileOfferData));
+        let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.RETRACT_FILE_OFFER);
+        msg.retractFileOfferData = {
+            fileId: fileID,
+            nodeId: this.nodeID,
+        };
+        this.handleMessage(this.createMessagePackageBundle(msg));
     }
 
-    sendRemoveFileRequest(fileOffer: PoolFileOffer) {
-        if (!FileManager.hasFileDownload(fileOffer.fileID)) return;
-        FileManager.completeFileDownload(fileOffer.fileID);
-        if (fileOffer.seederNodeID == "") return;
-        let removeFileRequestData: PoolRemoveFileRequest = {
-            requestingNodeID: this.nodeID,
-            fileID: fileOffer.fileID,
+    sendRetractFileRequest(fileOffer: PoolFileOffer) {
+        let fileID = fileOffer.fileInfo?.fileId;
+        if (!fileID) return;
+        if (!FileManager.hasFileDownload(fileID)) return;
+        FileManager.completeFileDownload(fileID);
+        if (fileOffer.seederNodeId == "") return;
+        let msg: PoolMessage = this.createNewMessage(PoolMessage_Type.RETRACT_FILE_REQUEST);
+        msg.retractFileRequestData = {
+            fileId: fileID,
+            requestingNodeId: this.nodeID,
         };
-        this.handleMessage(this.createMessagePackage(PoolMessageType.REMOVE_FILE_REQUEST, PoolMessageAction.REQUEST, removeFileRequestData, fileOffer.seederNodeID));
+        this.handleMessage(this.createMessagePackageBundle(msg, fileOffer.seederNodeId));
     }
 
     ////////////////////////////////////////////////////////////////
     // Send chunk functions
     ////////////////////////////////////////////////////////////////
 
-    sendChunk(fileID: string, chunkNumber: number, chunk: ArrayBuffer, dests: PoolMessageDestinationInfo[] | undefined, partnerIntPath: number, nextChunk?: () => any) {
-        if (!this.reconnect) return;
+    sendChunk(fileID: string, chunkNumber: number, chunk: Uint8Array, destNodeIDs: string[] | undefined): Promise<boolean> {
+
+        if (!this.reconnect) return Promise.resolve(false);
         let hasMyNode = false;
-        if (dests) {
-            for (let i = dests.length - 1; i >= 0; i--) {
-                dests[i].visited = false;
-                if (dests[i].nodeID == this.nodeID) {
-                    //console.log("ADDING FILE CHUNK", chunkNumber);
+        if (destNodeIDs) {
+            for (let i = destNodeIDs.length - 1; i >= 0; i--) {
+                // dests[i].visited = false;
+                if (destNodeIDs[i] == this.nodeID) {
+                    // console.log("ADDING FILE CHUNK", chunkNumber);
+                    // No splice because other than !this.activeNodes.has(destNodeID), dests are not supposed to change
+                    // getDests() will make our node visited regardless 
                     FileManager.addFileChunk(fileID, chunkNumber, chunk);
                     hasMyNode = true;
-                } else if (!this.activeNodes.has(dests[i].nodeID)) {
-                    console.log("ACTIVE NODE NO LONGER ACTIVE", this.activeNodes)
-                    dests.splice(i, 1);
+                } else if (!this.activeNodes.has(destNodeIDs[i])) {
+                    console.log("ACTIVE NODE NO LONGER ACTIVE", this.activeNodes);
+                    destNodeIDs.splice(i, 1);
                 }
             }
-            if (dests.length == 0 || (dests.length == 1 && hasMyNode)) {
-                if (nextChunk) nextChunk();
-                return;
+            if (destNodeIDs.length == 0 || (destNodeIDs.length == 1 && hasMyNode)) {
+                // if (nextChunk) nextChunk();
+                // return;
+                return Promise.resolve(true);
             }
         }
-        let src: PoolMessageSourceInfo = this.getSrc();
-        //console.log("sending chunk", chunkNumber, dests);
-        this.broadcastMessage(createBinaryMessage(chunk, fileID, chunkNumber, src, dests), src, dests, this.nodeID, partnerIntPath);
+
+        // console.log("sending chunk", chunkNumber, destNodeIDs);
+        // console.log(chunk);
+
+        let chunkInfo: PoolChunkInfo = {
+            fileId: fileID,
+            chunkNumber,
+        };
+        this.broadcastMessage(this.createChunkMessagePackageBundle(chunkInfo, new Uint8Array(chunk), destNodeIDs));
+        
         if (!this.checkBufferQueueFree()) {
+            let resolve: (value: boolean | PromiseLike<boolean>) => void;
+            let promise = new Promise<boolean>((res, rej) => {
+                resolve = res;
+            });
             // console.log("CHUNK IS WAITING");
-            // EVNET EMITTER?
             this.DCBufferQueueEventEmitter.once(DC_BUFFER_AVAILABLE_TO_FILL_NAME, () => {
                 //console.log("FINALLY SENDING CHUNK", chunkNumber);
-                if (nextChunk) nextChunk();
+                // if (nextChunk) nextChunk();
+                resolve(true);
             })
+            return promise;
         } else {
-            if (nextChunk) nextChunk();
+            // if (nextChunk) nextChunk();
+            return Promise.resolve(true);
         }
     }
 
-    async sendFile(poolFileRequest: PoolFileRequest) {
+    async sendFile(fileRequestData: PoolMessage_FileRequestData) {
         let fileSource: File | Blob;
+        let fileID: string = fileRequestData.fileId;
 
-        if (FileManager.hasFileOffer(this.poolID, poolFileRequest.fileID)) {
-            let exists = await this.validateFileOffer(poolFileRequest.fileID);
-            if (!exists && !FileManager.hasMediaCache(poolFileRequest.fileID)) return;
-        } else if (!FileManager.hasMediaCache(poolFileRequest.fileID)) return;
+        if (FileManager.hasFileOffer(this.poolID, fileID)) {
+            let exists = await this.validateFileOffer(fileID);
+            if (!exists && !FileManager.hasMediaCache(fileID)) return;
+        } else if (!FileManager.hasMediaCache(fileID)) return;
 
-        if (poolFileRequest.chunksMissing.length != 0) {
-            compactChunkRanges(poolFileRequest.chunksMissing);
-        }
+        // The reason why this partitioning works if because the chunkRanges are most likely
+        // going to be one per cacheChunk, if not, it doesn't matter becasue we garaunteed
+        // it to be within a cacheChunk anyways as part of the specification
+        let promisedChunksMap: Map<number, PoolChunkRange[]> = mapPromisedChunks(fileRequestData.promisedChunks);
 
-        //console.log("pass", poolFileRequest.cacheChunksCovered);
+        let fileRequest: OngoingFileRequest = {
+            fileRequestData: fileRequestData,
+            startChunkNumber: -1,
+            nextChunkNumber: 0,
+            wrappedAround: false,
+            chunksMissingRangeNumber: 0,
+            promisedChunksMap: promisedChunksMap,
+            cancelled: false,
+        };
 
-        let fileRequest: OngoingFileRequest = poolFileRequest as OngoingFileRequest;
-        let concFileRequests = this.curFileRequests.get(poolFileRequest.fileID);
+        let concFileRequests = this.curFileRequests.get(fileID);
         if (!concFileRequests) {
-            fileRequest.nextChunkNumber = 0;
-            fileRequest.wrappedAround = false;
-            fileRequest.chunksMissingRangeNumber = 0;
-            fileRequest.cacheChunksSet = new Set<number>(fileRequest.cacheChunksCovered);
-            fileRequest.cancelled = false;
             concFileRequests = [fileRequest];
-            this.curFileRequests.set(fileRequest.fileID, concFileRequests);
+            this.curFileRequests.set(fileID, concFileRequests);
 
-            if (FileManager.hasFileOffer(this.poolID, poolFileRequest.fileID)) {
-                fileSource = FileManager.getFileOffer(this.poolID, poolFileRequest.fileID)!.file;
-                if (poolFileRequest.requestingNodeID != this.nodeID && !this.activeNodes.has(poolFileRequest.requestingNodeID)) return;    
-            } else if (FileManager.hasMediaCache(poolFileRequest.fileID)) {
-                let mediaObjectURL = FileManager.getMediaCache(poolFileRequest.fileID)!;
+            if (FileManager.hasFileOffer(this.poolID, fileID)) {
+                fileSource = FileManager.getFileOffer(this.poolID, fileID)!.file;
+                if (fileRequestData.requestingNodeId != this.nodeID && !this.activeNodes.has(fileRequestData.requestingNodeId)) return;    
+            } else if (FileManager.hasMediaCache(fileID)) {
+                let mediaObjectURL = FileManager.getMediaCache(fileID)!;
                 fileSource = await (await fetch(mediaObjectURL)).blob();
             }
         } else {
             for (let i = 0; i < concFileRequests.length; i++) {
-                if (concFileRequests[i].requestingNodeID == fileRequest.requestingNodeID) {
-                    for (let j = 0; j < fileRequest.cacheChunksCovered.length; j++) {
-                        concFileRequests[i].cacheChunksSet!.add(fileRequest.cacheChunksCovered[j]);
-                    }
+                if (concFileRequests[i].fileRequestData.requestingNodeId == fileRequest.fileRequestData.requestingNodeId) {
+
+                    let requestingFileRequest = concFileRequests[i];
+                    if (requestingFileRequest.fileRequestData.chunksMissing.length != 0) return;
+
+                    promisedChunksMap.forEach((chunkRanges, cacheChunkNumber) => {
+                        let existingChunkRanges = requestingFileRequest.promisedChunksMap.get(cacheChunkNumber);
+                        if (!existingChunkRanges) {
+                            existingChunkRanges = [];
+                            requestingFileRequest.promisedChunksMap.set(cacheChunkNumber, existingChunkRanges);
+                        }
+                        for (const chunkRange of chunkRanges) {
+                            addToChunkRanges(chunkRange, existingChunkRanges);
+                        }
+                    });
                     return;
                 }
             }
-            fileRequest.nextChunkNumber = 0;
-            fileRequest.wrappedAround = false;
-            fileRequest.chunksMissingRangeNumber = 0;
-            fileRequest.cacheChunksSet = new Set<number>(fileRequest.cacheChunksCovered);
-            fileRequest.cancelled = false;
             concFileRequests.push(fileRequest);
             return;
         }
 
+        // chunksMissing are only considered if there are no existing requests
+        // This is to counter network congestion issues 
+        if (fileRequestData.chunksMissing.length != 0) {
+            compactChunkRanges(fileRequestData.chunksMissing);
+        }
+
         let chunkNumber = 0;
-        let partnerIntPath = 0;
         let totalChunks = Math.ceil(fileSource!.size / CHUNK_SIZE);
         let destNodeIDs: string[]; // UPDATE DEST EERY TIME NEXT CHUNK IS DONE, SO fileReader.onload doesn't need to check again
 
         let fileReader = new FileReader();
         fileReader.onloadend = (e) => {
             if (e.target?.error != null) {
-                this.sendRetractFileOffer(fileRequest.fileID);
+                this.sendRetractFileOffer(fileID);
             }
             if (!e.target) return;
-            if (!FileManager.hasFileOffer(this.poolID, poolFileRequest.fileID) && !FileManager.hasMediaCache(poolFileRequest.fileID)) return;
-            partnerIntPath = getCacheChunkNumberFromChunkNumber(chunkNumber) % 3;
-            this.sendChunk(fileRequest.fileID, chunkNumber++, e.target.result as ArrayBuffer, this.getDests(destNodeIDs), partnerIntPath, nextChunk);
+            if (!FileManager.hasFileOffer(this.poolID, fileID) && !FileManager.hasMediaCache(fileID)) return;
+            this.sendChunk(fileID, chunkNumber++, new Uint8Array(e.target.result as ArrayBuffer), destNodeIDs).then((success) => {
+                if (success) {
+                    nextChunk();
+                }
+            });
         }
 
+        // Having nextChunk is ok for now since fileReader is async
+        // But if fileReader isn't async, chaining nextChunk will lead to stack overflow
         let nextChunk = () => {
             //console.log("next chunk");
             if (!concFileRequests) return;
@@ -916,56 +992,67 @@ export class PoolClient {
             let minNextChunkNumber = Infinity;
             for (let i = concFileRequests.length - 1; i >= 0; i--) {
                 let req = concFileRequests[i];
-                if (req.cancelled || !this.activeNodes.has(req.requestingNodeID)) {
+                let reqData = req.fileRequestData;
+                if (req.cancelled || !this.activeNodes.has(reqData.requestingNodeId)) {
                     concFileRequests.splice(i, 1);
                     continue;
                 }
-                if (req.startChunkNumber == undefined) {
+                if (req.startChunkNumber == -1) {
                     req.startChunkNumber = chunkNumber;
                     req.nextChunkNumber = chunkNumber;
                 }
                 if (req.nextChunkNumber > chunkNumber) {
                     if (req.nextChunkNumber < minNextChunkNumber) {
-                        destNodeIDs = [req.requestingNodeID];
+                        destNodeIDs = [reqData.requestingNodeId];
                         minNextChunkNumber = req.nextChunkNumber;
                     } else if (req.nextChunkNumber == minNextChunkNumber) {
-                        destNodeIDs.push(req.requestingNodeID);
+                        destNodeIDs.push(reqData.requestingNodeId);
                     }
                     continue;
                 } else {
                     req.nextChunkNumber = chunkNumber;
                 }
-                if (req.chunksMissing.length != 0) {
-                    do {
-                        if (req.nextChunkNumber >= totalChunks) break;
-                        if (req.nextChunkNumber < req.chunksMissing[req.chunksMissingRangeNumber][0]) {
-                            req.nextChunkNumber = req.chunksMissing[req.chunksMissingRangeNumber][0];
-                        } else if (req.nextChunkNumber > req.chunksMissing[req.chunksMissingRangeNumber][1]) {
-                            do {
-                                req.chunksMissingRangeNumber++;
-                                if (req.chunksMissingRangeNumber >= req.chunksMissing.length) {
-                                    req.nextChunkNumber = totalChunks;
-                                    break;
+                if (reqData.chunksMissing.length != 0) {
+                    // do {
+                    if (req.nextChunkNumber >= totalChunks) break;
+                    if (req.nextChunkNumber < reqData.chunksMissing[req.chunksMissingRangeNumber].start) {
+                        req.nextChunkNumber = reqData.chunksMissing[req.chunksMissingRangeNumber].start;
+                    } else if (req.nextChunkNumber > reqData.chunksMissing[req.chunksMissingRangeNumber].end) {
+                        do {
+                            req.chunksMissingRangeNumber++;
+                            if (req.chunksMissingRangeNumber >= reqData.chunksMissing.length) {
+                                req.nextChunkNumber = totalChunks;
+                                break;
+                            }
+                            if (req.nextChunkNumber <= reqData.chunksMissing[req.chunksMissingRangeNumber].end) {
+                                if (reqData.chunksMissing[req.chunksMissingRangeNumber].start > req.nextChunkNumber) {
+                                    req.nextChunkNumber = reqData.chunksMissing[req.chunksMissingRangeNumber].start;
                                 }
-                                if (req.nextChunkNumber <= req.chunksMissing[req.chunksMissingRangeNumber][1]) {
-                                    if (req.chunksMissing[req.chunksMissingRangeNumber][0] > req.nextChunkNumber) {
-                                        req.nextChunkNumber = req.chunksMissing[req.chunksMissingRangeNumber][0];
-                                    }
-                                    break;
-                                }
-                            } while (true);
-                        }
-                        let cacheChunkNumber = getCacheChunkNumberFromChunkNumber(req.nextChunkNumber);
-                        if (!req.cacheChunksSet.has(cacheChunkNumber)) break;
-                        req.nextChunkNumber = (cacheChunkNumber + 1) * CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR;
-                    } while (true);
+                                break;
+                            }
+                        } while (true);
+                    }
+                    //     let chunkRanges = req.promisedChunksMap.get(getCacheChunkNumberFromChunkNumber(req.nextChunkNumber));
+                    //     if (chunkRanges) {
+                    //         let chunkRange = existsInChunkRanges(req.nextChunkNumber, chunkRanges);
+                    //         if (chunkRange) {
+                    //             req.nextChunkNumber = chunkRange.end + 1;
+                    //             continue;
+                    //         }
+                    //     }
+                    //     break;
+                    // } while (true);
                 } else {
                     while (req.nextChunkNumber < totalChunks) {
-                        if (req.cacheChunksSet.has(getCacheChunkNumberFromChunkNumber(req.nextChunkNumber))) {
-                            req.nextChunkNumber += CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR;
-                        } else {
-                            break;
+                        let chunkRanges = req.promisedChunksMap.get(getCacheChunkNumberFromChunkNumber(req.nextChunkNumber));
+                        if (chunkRanges) {
+                            let chunkRange = existsInChunkRanges(req.nextChunkNumber, chunkRanges);
+                            if (chunkRange) {
+                                req.nextChunkNumber = chunkRange.end + 1;
+                                continue;
+                            }
                         }
+                        break;
                     }
                 }
                 if (req.wrappedAround && req.nextChunkNumber >= req.startChunkNumber) {
@@ -974,15 +1061,15 @@ export class PoolClient {
                     continue;
                 }
                 if (req.nextChunkNumber < minNextChunkNumber) {
-                    destNodeIDs = [req.requestingNodeID];
+                    destNodeIDs = [reqData.requestingNodeId];
                     minNextChunkNumber = req.nextChunkNumber;
                 } else if (req.nextChunkNumber == minNextChunkNumber) {
-                    destNodeIDs.push(req.requestingNodeID);
+                    destNodeIDs.push(reqData.requestingNodeId);
                 }
             }
 
             if (concFileRequests.length == 0) {
-                this.curFileRequests.delete(fileRequest.fileID);
+                this.curFileRequests.delete(fileID);
                 //console.log("DELETING", concFileRequests, this.curFileRequests);
                 return;
             }
@@ -1005,7 +1092,6 @@ export class PoolClient {
         if (!fileOfferData) return;
 
         let chunkNumber = 0;
-        let partnerIntPath = 0;
         let totalChunks = Math.ceil(fileOfferData.file.size / CHUNK_SIZE);
 
         let fileReader = new FileReader();
@@ -1015,8 +1101,11 @@ export class PoolClient {
             }
             if (!e.target) return;
             if (!FileManager.hasFileOffer(this.poolID, fileID) && !FileManager.hasMediaCache(fileID)) return;
-            partnerIntPath = getCacheChunkNumberFromChunkNumber(chunkNumber) % 3;
-            this.sendChunk(fileID, chunkNumber++, e.target.result as ArrayBuffer, undefined, partnerIntPath, nextChunk);
+            this.sendChunk(fileID, chunkNumber++, new Uint8Array(e.target.result as ArrayBuffer), undefined).then((success) => {
+                if (success) {
+                    nextChunk();
+                }
+            });;
         }
 
         let nextChunk = () => {
@@ -1030,127 +1119,189 @@ export class PoolClient {
         nextChunk();
     }
 
-    addToSendCache(cacheChunkData: CacheChunkData, destNodeID: string) {
-        let existingSendCache = this.sendCacheMap.get(cacheChunkData.key);
+    // In desktop, params should just be fileID, cacheChunkNumber, requestedChunkRanges, and requestingNodeID
+    // The idea is cacheChunkNumber should be put into queue, not the actual chunkRange so when actually sending,
+    // just need to seek, then read the whole cacheChunk (one call) and send only the parts that are requested
+    addPromisedChunks(key: string, cacheChunkNumber: number, requestedChunkRanges: PoolChunkRange[], requestingNodeID: string) {
+        let existingSendCache = this.sendCacheRequestInfo.get(key);
         if (!existingSendCache) {
             existingSendCache = [];
-            this.sendCacheMap.set(cacheChunkData.key, existingSendCache);
-            this.sendCacheQueue.push(cacheChunkData);
+            this.sendCacheRequestInfo.set(key, existingSendCache);
+            this.sendCacheQueue.push({
+                key,
+                cacheChunkNumber,
+            });
         }
-        existingSendCache.push(destNodeID);
-        if (!this.sendingCache) this.startSendCacheChunks();
+        let foundCacheRequest: boolean = false;
+        for (const cacheReqInfo of existingSendCache) {
+            if (cacheReqInfo.requestingNodeID == requestingNodeID) {
+                cacheReqInfo.requestedChunkRanges.push(...requestedChunkRanges);
+                // compactChunkRanges(cacheReqInfo.requestedChunkRanges); // Not needed as it is only used as check
+                foundCacheRequest = true;
+                break;
+            }
+        }
+        if (!foundCacheRequest) {
+            existingSendCache.push({
+                requestingNodeID,
+                requestedChunkRanges,
+            });
+        }
+        if (!this.sendingCache) this.startSendPromisedChunks();
     }
 
-    startSendCacheChunks() {
+    async startSendPromisedChunks() {
         this.sendingCache = true;
-        let nextCacheChunk = async () => {
-            if (this.sendCacheQueue.length == 0 || !this.reconnect) {
-                console.log("END SEND CACHE")
-                this.sendingCache = false;
-                return;
-            }
-            let cacheChunkData = this.sendCacheQueue[0];
-            let cacheChunk = await FileManager.getCacheChunk(cacheChunkData.key);
+        console.log("START SEND CACHE");
+        // nextCacheChunk();
+
+        while (this.sendCacheQueue.length != 0 && this.reconnect) {
+            let cacheInfo = this.sendCacheQueue[0];
+            let cacheChunk = await FileManager.getCacheChunk(cacheInfo.key);
             this.sendCacheQueue.shift();
-            let destIDs = this.sendCacheMap.get(cacheChunkData.key);
-            this.sendCacheMap.delete(cacheChunkData.key);
+            let cacheRequests = this.sendCacheRequestInfo.get(cacheInfo.key);
+            this.sendCacheRequestInfo.delete(cacheInfo.key);
             if (!cacheChunk) {
                 // POSSIBLE TO SEND REQUEST FOR THESE CHUNKS ON BEHALF?
-                console.log("NO CACHECHUNK", cacheChunkData.key);
-                nextCacheChunk();
-                return;
+                console.log("NO CACHECHUNK", cacheInfo.key);
+                continue;
             }
-            let hasMyNode = false;
-            if (destIDs) {
-                for (let i = destIDs.length - 1; i >= 0; i--) {
-                    // if (destIDs[i] == this.nodeID) {
-                    //     hasMyNode = true;
-                    //     destIDs.splice(i, 1);
-                    // } else 
-                    if (!this.activeNodes.has(destIDs[i])) {
-                        destIDs.splice(i, 1);
+            if (cacheRequests) {
+                for (let i = cacheRequests.length - 1; i >= 0; i--) {
+                    if (!this.activeNodes.has(cacheRequests[i].requestingNodeID)) {
+                        cacheRequests.splice(i, 1);
                     }
                 }
             }
-            if (!destIDs || (destIDs.length == 0 && !hasMyNode)) {
-                nextCacheChunk();
-                return;
+            if (!cacheRequests || cacheRequests.length == 0) {
+                continue;
             }
 
-            let i = 0;
-            let chunkNumber = 0;
-            let fileID = cacheChunkData.key.split(':')[2];
-            let dests = this.getDests(destIDs);
+            let fileID = cacheInfo.key.split(':')[2];
+            let chunkNumber = getChunkNumberFromCacheChunkNumber(cacheInfo.cacheChunkNumber);
+            let success = true;
             // console.log("SENDING CACHECHUNK NUMBER", cacheChunkData.cacheChunkNumber);
-            let nextChunk = () => {
-                // console.log("NEXTCHUNK", j);
-                if (i >= cacheChunk.length || (dests.length == 0 && !hasMyNode)) {
-                    nextCacheChunk();
-                    // console.log("NEXT CACHE CHUNK");
-                    return;
-                }
+            for (let i = 0; i < cacheChunk.length; i++, chunkNumber++) {        
+                // In browser, we don't need to check because cacheChunks are complete
+                // if (cacheChunk[i] DNE) continue;
 
-                chunkNumber = (cacheChunkData.cacheChunkNumber * CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR) + i;
-                i++
-                // if (hasMyDest) {
-                //     FileManager.addFileChunk(fileID, chunkNumber, cacheChunk[i - 1]);
-                //     if (dests.length == 0) nextChunk();
-                // }
-                // if (dests.length != 0) {
-                //     this.sendChunk(fileID, chunkNumber, cacheChunk[i - 1], dests, this.nodePosition.PartnerInt, nextChunk);
-                // }
-                this.sendChunk(fileID, chunkNumber, cacheChunk[i - 1], dests, this.nodePosition.partnerInt, nextChunk);
-            }
-            nextChunk();
-        }
-
-        console.log("START SEND CACHE");
-        nextCacheChunk();
-    }
-
-    addAndSendChunksCovered(poolFileRequest: PoolFileRequest, partnerIntPath: number) {
-        if (!this.availableFiles.has(poolFileRequest.fileID)) return;
-        if (partnerIntPath != this.nodePosition.partnerInt && poolFileRequest.requestingNodeID != this.nodeID) return;
-        if (FileManager.hasMediaCache(poolFileRequest.fileID)) {
-            let totalSize = this.availableFiles.get(poolFileRequest.fileID)!.fileSeeders.totalSize;
-            console.log(getCacheChunkNumberFromByteSize(totalSize));
-            for (let i = 0; i <= getCacheChunkNumberFromByteSize(totalSize); i++) {
-                if (i % 3 != partnerIntPath) {
-                    poolFileRequest.cacheChunksCovered.push(i);
-                }
-            }
-            console.log(poolFileRequest.cacheChunksCovered, partnerIntPath);
-            this.sendFile(poolFileRequest);
-        } else {
-            // I argue that even if it's only like [1000, 1001] for chunks missing, you should send whole cache
-            // Becuase then, the nodes will have the full cache
-            let cacheChunkMapData = FileManager.getCacheChunkMapData(poolFileRequest.fileID);
-            if (!cacheChunkMapData) return;
-            let cacheChunks = new Set<number>(poolFileRequest.cacheChunksCovered);
-            if (poolFileRequest.chunksMissing.length == 0) {
-                for (let i = 0; i < cacheChunkMapData.length; i++) {
-                    if (cacheChunkMapData[i].cacheChunkNumber % 3 == partnerIntPath && !cacheChunks.has(cacheChunkMapData[i].cacheChunkNumber)) {
-                        this.addToSendCache(cacheChunkMapData[i], poolFileRequest.requestingNodeID);
-                        poolFileRequest.cacheChunksCovered.push(cacheChunkMapData[i].cacheChunkNumber);
-                    }
-                }
-            } else {
-                for (let i = 0; i < poolFileRequest.chunksMissing.length; i++) {
-                    let start = getCacheChunkNumberFromChunkNumber(poolFileRequest.chunksMissing[i][0]);
-                    let end = getCacheChunkNumberFromChunkNumber(poolFileRequest.chunksMissing[i][1]);
-                    for (let j = start; j <= end; j++) {
-                        if (!cacheChunks.has(j)) {
-                            let pos = searchPosInCacheChunkMapData(cacheChunkMapData, j);
-                            if (pos >= 0) {
-                                this.addToSendCache(cacheChunkMapData[pos], poolFileRequest.requestingNodeID);
-                                poolFileRequest.cacheChunksCovered.push(j);
-                                cacheChunks.add(j);
-                            }
+                let destNodeIDs = [];
+                for (const cacheRequest of cacheRequests) {
+                    for (const chunkRange of cacheRequest.requestedChunkRanges) { 
+                        if (inChunkRange(chunkNumber, chunkRange)) {
+                            destNodeIDs.push(cacheRequest.requestingNodeID);
+                            break;
                         }
                     }
                 }
+
+                // console.log("Sending cache to", destNodeIDs, chunkNumber);
+
+                success = await this.sendChunk(fileID, chunkNumber, cacheChunk[i], destNodeIDs);
             }
+
+            if (!success) break;
         }
+        console.log("END SEND CACHE");
+        this.sendingCache = false;
+    }
+
+    sendPromisedChunks(fileRequestData: PoolMessage_FileRequestData, partnerIntPath: number): boolean {
+        let updatedData = false;
+        let fileID = fileRequestData.fileId;
+
+        if (fileRequestData.chunksMissing.length != 0) return updatedData; 
+
+        if (!this.availablefileSeeders.has(fileID)) return updatedData;
+        if (partnerIntPath != this.nodePosition.partnerInt && fileRequestData.requestingNodeId != this.nodeID) return updatedData;
+
+        // partnerIntPath == this.nodePosition.partnerInt
+
+        let alreadyPromisedChunksMap: Map<number, PoolChunkRange[]> = mapPromisedChunks(fileRequestData.promisedChunks);
+        if (FileManager.hasMediaCache(fileID)) {
+
+            let totalSize = this.availablefileSeeders.get(fileID)?.fileInfo?.totalSize;
+            if (!totalSize) return updatedData;
+
+            // console.log(getCacheChunkNumberFromByteSize(totalSize));
+            for (let cacheChunkNumber = 0; cacheChunkNumber <= getCacheChunkNumberFromByteSize(totalSize); cacheChunkNumber++) {
+                if (getPartnerIntFromCacheChunkNumber(cacheChunkNumber) == partnerIntPath && !alreadyPromisedChunksMap.has(cacheChunkNumber)) {
+                    fileRequestData.promisedChunks.push({
+                        start: getChunkNumberFromCacheChunkNumber(cacheChunkNumber),
+                        end: getChunkNumberFromCacheChunkNumber(cacheChunkNumber + 1) - 1,
+                    });
+                    updatedData = true;
+                }
+            }
+
+            // console.log(fileRequestData.promisedCacheChunks, partnerIntPath);
+            this.sendFile(fileRequestData);
+
+        } else {
+
+            let cacheChunkMapData = FileManager.getCacheChunkMapData(fileID);
+            if (!cacheChunkMapData) return updatedData;
+
+            // if (fileRequestData.chunksMissing.length == 0) {
+                cacheChunkMapData.forEach((cacheChunkData, cacheChunkNumber) => {
+                    if (getPartnerIntFromCacheChunkNumber(cacheChunkNumber) == partnerIntPath) {
+                        let alreadyPromisedChunks = alreadyPromisedChunksMap.get(cacheChunkNumber) || [];
+                        let promisedChunks = calcChunkRangesDifference(cacheChunkData.chunkRanges, alreadyPromisedChunks, true);
+                        if (promisedChunks.length == 0) return;
+                        this.addPromisedChunks(
+                            cacheChunkData.key,
+                            cacheChunkNumber,
+                            promisedChunks,
+                            fileRequestData.requestingNodeId,
+                        );
+                        for (const chunkRange of promisedChunks) {
+                            // promisedChunks doesn't need to be sorted or compacted
+                            fileRequestData.promisedChunks.push(chunkRange);
+                            // addToChunkRanges(chunkRange, fileRequestData.promisedChunks);
+                        }
+                        updatedData = true;
+                    }
+                });
+            // }
+            // chunks missing shouldn't have promisedCacheChunks
+            // it's bad for network congestion, and node should have
+            // at least one way to deal with "accidently" non compliant
+            // nodes (i.e node malfunctions and adds to promisedChunks even)
+            // when they don't have the chunks
+
+            // else {
+            //     compactChunkRanges(fileRequestData.chunksMissing);
+            //     for (let i = 0; i < fileRequestData.chunksMissing.length; i++) {
+            //         let startCacheChunkNumber = getCacheChunkNumberFromChunkNumber(fileRequestData.chunksMissing[i].start);
+            //         let endCacheChunkNumber = getCacheChunkNumberFromChunkNumber(fileRequestData.chunksMissing[i].end);
+            //         for (let cacheChunkNumber = startCacheChunkNumber; cacheChunkNumber <= endCacheChunkNumber; cacheChunkNumber++) {
+            //             if (getPartnerIntFromCacheChunkNumber(cacheChunkNumber) == partnerIntPath) {
+            //                 let cacheChunkData = cacheChunkMapData.get(cacheChunkNumber);
+            //                 if (!cacheChunkData) continue;
+            //                 let alreadyPromisedChunks = alreadyPromisedChunksMap.get(cacheChunkNumber) || [];
+            //                 let promisedChunks = calcChunkRangesDifference(cacheChunkData.chunkRanges, alreadyPromisedChunks, true);
+            //                 if (promisedChunks.length == 0) continue;
+            //                 let relevantPromisedChunks = calcChunkRangesIntersection(promisedChunks, [fileRequestData.chunksMissing[i]], true);
+            //                 if (relevantPromisedChunks.length == 0) continue;
+            //                 this.addPromisedChunks(
+            //                     cacheChunkData.key,
+            //                     cacheChunkNumber,
+            //                     relevantPromisedChunks,
+            //                     fileRequestData.requestingNodeId,
+            //                 );
+            //                 for (const chunkRange of relevantPromisedChunks) {
+            //                     // promisedChunks doesn't need to be sorted or compacted
+            //                     fileRequestData.promisedChunks.push(chunkRange);
+            //                     // addToChunkRanges(chunkRange, fileRequestData.promisedChunks);
+            //                 }
+            //                 updatedData = true;
+            //             }
+            //         }
+            //     }
+            // }
+        }
+
+        return updatedData;
     }
 
     ////////////////////////////////////////////////////////////////
@@ -1158,27 +1309,22 @@ export class PoolClient {
     ////////////////////////////////////////////////////////////////
 
     addAvailableFileOffer(fileOffer: PoolFileOffer) {
-        let availableFile = this.availableFiles.get(fileOffer.fileID);
-        console.log("ADDING AVAILABLE FILE", fileOffer.fileID);
-        if (!availableFile) {
-            availableFile = {
-                fileSeeders: {
-                    fileID: fileOffer.fileID,
-                    originNodeID: fileOffer.originNodeID,
-                    fileName: fileOffer.fileName,
-                    totalSize: fileOffer.totalSize,
-                    seederNodeIDs: [],
-                },
-                lastRequestedNodeID: "",
-                lastProgress: 0,
-                retryCount: 0,
+        let fileInfo = fileOffer.fileInfo;
+        if (!fileInfo) return;
+        let fileID = fileInfo.fileId;
+        let fileSeeders = this.availablefileSeeders.get(fileID);
+        console.log("ADDING AVAILABLE FILE", fileID);
+        if (!fileSeeders) {
+            fileSeeders = {
+                fileInfo,
+                seederNodeIds: [],
             };
-            this.availableFiles.set(fileOffer.fileID, availableFile);
+            this.availablefileSeeders.set(fileID, fileSeeders);
             //console.log("SETTING AVAILABLE FILE", this.availableFiles.size);
         }
         //console.log(availableFile.fileOfferAndSeeders.seederNodeIDs.length, availableFile.fileOfferAndSeeders.seederNodeIDs.includes(fileOffer.seederNodeID), fileOffer.seederNodeID)
-        if (!availableFile.fileSeeders.seederNodeIDs.includes(fileOffer.seederNodeID)) {
-            availableFile.fileSeeders.seederNodeIDs.push(fileOffer.seederNodeID);
+        if (!fileSeeders.seederNodeIds.includes(fileOffer.seederNodeId)) {
+            fileSeeders.seederNodeIds.push(fileOffer.seederNodeId);
             store.dispatch(poolAction.addFileOffer({
                 key: this.poolKey,
                 fileOffer: fileOffer,
@@ -1187,23 +1333,10 @@ export class PoolClient {
         }
     }
 
-    addAvailableFileOfferAndSeeders(fileOfferAndSeeders: PoolFileSeeders) {
-        for (const seederNodeID of fileOfferAndSeeders.seederNodeIDs) {
-            let fileOffer: PoolFileOffer = {
-                seederNodeID: seederNodeID,
-                fileID: fileOfferAndSeeders.fileID,
-                originNodeID: fileOfferAndSeeders.originNodeID,
-                fileName: fileOfferAndSeeders.fileName,
-                totalSize: fileOfferAndSeeders.totalSize,
-            };
-            this.addAvailableFileOffer(fileOffer);
-        }
-    }
-
     removeAvailableFileOffer(fileID: string, nodeID: string) {
-        let availableFile = this.availableFiles.get(fileID);
-        if (!availableFile) return;
-        let seederNodeIDs = availableFile.fileSeeders.seederNodeIDs;
+        let fileSeeders = this.availablefileSeeders.get(fileID);
+        if (!fileSeeders) return;
+        let seederNodeIDs = fileSeeders.seederNodeIds;
         for (let i = 0; i < seederNodeIDs.length; i++) {
             if (seederNodeIDs[i] == nodeID) {
                 seederNodeIDs.splice(i, 1);
@@ -1215,7 +1348,7 @@ export class PoolClient {
                 break;
             }
         }
-        if (seederNodeIDs.length == 0) this.availableFiles.delete(fileID);
+        if (seederNodeIDs.length == 0) this.availablefileSeeders.delete(fileID);
     }
 
     validateFileOffer(fileID: string): Promise<boolean> {
@@ -1232,16 +1365,16 @@ export class PoolClient {
         });
     }
 
-    updateLatest(updateLatestInfo: PoolUpdateLatestInfo) {
-        this.addMessages(updateLatestInfo.messages);
-        if (!updateLatestInfo.messagesOnly) {
+    updateLatest(latestReplyData: PoolMessage_LatestReplyData) {
+        this.addMessages(latestReplyData.messages);
+        if (this.new) { // !messagesOnly
             store.dispatch(poolAction.clearFileOffers({ key: this.poolKey } as PoolAction));
-            this.availableFiles.clear();
-            for (const fileOfferAndSeeders of updateLatestInfo.fileSeeders) {
-                for (const seederNodeID of fileOfferAndSeeders.seederNodeIDs) {
+            this.availablefileSeeders.clear();
+            for (const fileSeeders of latestReplyData.fileSeeders) {
+                for (const seederNodeID of fileSeeders.seederNodeIds) {
                     let fileOffer: PoolFileOffer = {
-                        ...fileOfferAndSeeders,
-                        seederNodeID: seederNodeID,
+                        ...fileSeeders,
+                        seederNodeId: seederNodeID,
                     }
                     this.addAvailableFileOffer(fileOffer);
                 }
@@ -1250,174 +1383,135 @@ export class PoolClient {
         this.new = false;
     }
 
-    removeFileRequest(removeFileRequestData: PoolRemoveFileRequest) {
-        let fileRequests = this.curFileRequests.get(removeFileRequestData.fileID);
+    retractFileRequest(retractFileRequestData: PoolMessage_RetractFileRequestData) {
+        let fileRequests = this.curFileRequests.get(retractFileRequestData.fileId);
         if (!fileRequests) return;
         for (let i = 0; i < fileRequests.length; i++) {
-            if (fileRequests[i].requestingNodeID == removeFileRequestData.requestingNodeID) {
+            if (fileRequests[i].fileRequestData.requestingNodeId == retractFileRequestData.requestingNodeId) {
                 fileRequests.splice(i, 1);
                 break;
             }
         }
     }
 
-    completeFileDownload(fileID: string) {
-        this.mediaHinterNodeIDs.delete(fileID);
-    }
-
     ////////////////////////////////////////////////////////////////
     // HandleMessage functions
     ////////////////////////////////////////////////////////////////
 
-    handleMessage(messagePackage: PoolMessagePackage, fromNodeID: string = this.nodeID) {
-        let src = messagePackage.src;
-        let dests = messagePackage.dests;
-        let action = messagePackage.action;
-        let partnerIntPath = messagePackage.partnerIntPath;
-        let msg = messagePackage.msg;
+    handleMessage(msgPkgBundle: PoolMessagePackageBundle, fromNodeID: string = this.nodeID) {
+        let msgPkg = msgPkgBundle.msgPkg;
+        let src = msgPkg.src;
+        let dests = msgPkg.dests;
+        let hasDests = dests.length != 0;
+        let partnerIntPath = msgPkg.partnerIntPath;
+        let hasPartnerIntPath = partnerIntPath != undefined;
+        let msg = msgPkg.msg;
+
+        if (!msg || !src) return;
+
         if (this.checkMessageDuplicate(msg)) return;
 
-        console.log("MSG RECV:", JSON.stringify(msg));
+        console.log("MSG RECV:", JSON.stringify(msgPkg));
 
-        if (dests) {
+        if (hasDests) {
             let isADest: boolean = this.checkAtMyDest(dests);
-            switch (msg.type) {
-            case PoolMessageType.GET_LATEST:
-                if (isADest) {
-                    if (action == PoolMessageAction.REQUEST) {
-                        this.sendRespondGetLatest(src.nodeID, msg.data);
-                    } else if (action == PoolMessageAction.REPLY) {
-                        this.updateLatest(msg.data);
-                    }
+            if (isADest) {
+                switch (msg.type) {
+                    case PoolMessage_Type.LATEST_REQUEST:
+                        if (!msg.latestRequestData) return;
+                        this.sendLatestReply(src.nodeId, msg.latestRequestData);
+                        break;
+                    case PoolMessage_Type.LATEST_REPLY:
+                        if (!msg.latestReplyData) return;
+                        this.updateLatest(msg.latestReplyData);
+                        break;
+                    case PoolMessage_Type.FILE_REQUEST:
+                        if (!msg.fileRequestData) return;
+                        this.sendFile(msg.fileRequestData);
+                        break;
+                    case PoolMessage_Type.RETRACT_FILE_REQUEST:
+                        if (!msg.retractFileRequestData) return;
+                        this.retractFileRequest(msg.retractFileRequestData);
+                        break;
+                    case PoolMessage_Type.MEDIA_HINT_REPLY:
+                        if (!msg.mediaHintReplyData) return;
+                        this.sendMediaRequestFromHintReply(src.nodeId, msg.mediaHintReplyData);
+                        break;
+                    default:
+                        return;
                 }
-                break;
-            case PoolMessageType.FILE_OFFER:
-                if (isADest) {
-                    if (action == PoolMessageAction.REQUEST) {
-                        this.sendFile(msg.data);
-                    }
-                } else {
-                    if (action == PoolMessageAction.REQUEST) {
-                        if (partnerIntPath != null) {
-                            this.addAndSendChunksCovered(msg.data, partnerIntPath);
+                if (dests.length == 1) return;
+            } else {
+                switch (msg.type) {
+                    case PoolMessage_Type.FILE_REQUEST:
+                        if (!msg.fileRequestData) return;
+                        if (hasPartnerIntPath) {
+                            if (this.sendPromisedChunks(msg.fileRequestData, partnerIntPath!)) {
+                                msgPkgBundle.encodedMsgPkg = PoolMessagePackage.encode(msgPkg).finish();
+                            }
                         }
-                    }
+                        break;
                 }
-                break;
-            case PoolMessageType.REMOVE_FILE_REQUEST:
-                if (isADest) {
-                    if (action == PoolMessageAction.REQUEST) {
-                        this.removeFileRequest(msg.data);
-                    }
-                }
-                break;
-            case PoolMessageType.REQUEST_MEDIA_HINT:
-                if (isADest) {
-                    if (action == PoolMessageAction.REPLY) {
-                        this.sendRequestMediaFromHint(src.nodeID, msg.data);
-                    }
-                }
-                break;
-            default:
-                return;
             }
-            if (isADest && dests.length == 1) return;
+            
         } else {
             switch (msg.type) {
-            case PoolMessageType.TEXT:
-                this.addMessage(msg);
-                break;
-            case PoolMessageType.FILE_OFFER:
-                let fileOffer: PoolFileOffer = msg.data;
-                this.addAvailableFileOffer(fileOffer);
-                if (fileOffer.seederNodeID == fileOffer.originNodeID) {
+                case PoolMessage_Type.TEXT:
+                    if (!msg.textData) return;
                     this.addMessage(msg);
-                }
-                break;
-            case PoolMessageType.IMAGE_OFFER:
-                let imageOffer: PoolImageOffer = msg.data;
-                if (imageOffer.totalSize > this.getPool().poolSettings.maxMediaSize) break;
-                this.addAvailableFileOffer(imageOffer);
-                if (imageOffer.seederNodeID != this.nodeID) {
-                    FileManager.addFileDownload(this.poolID, this.poolKey, imageOffer, true);
-                    let addDownloadAction: AddDownloadAction = {
-                        key: this.poolKey,
-                        fileInfo: imageOffer,
-                    };
-                    store.dispatch(poolAction.addDownload(addDownloadAction));
-                }
-                this.addMessage(msg);
-                //this.sendRequestFile(msg.data.fileInfo, [], false, true);
-                break;
-            case PoolMessageType.RETRACT_FILE_OFFER:
-                let removeAvailableFileOfferData: PoolRetractFileOffer = msg.data;
-                this.removeAvailableFileOffer(removeAvailableFileOfferData.fileID, removeAvailableFileOfferData.nodeID);
-                break;
-            case PoolMessageType.REQUEST_MEDIA_HINT:
-                if (action == PoolMessageAction.DEFAULT) {
-                    this.sendReplyMediaHint(src.nodeID, msg.data);
-                }
-                break;
-            default:
-                return
+                    break;
+                case PoolMessage_Type.FILE_OFFER:
+                    if (!msg.fileOfferData?.fileInfo) return;    
+                    this.addAvailableFileOffer(msg.fileOfferData);
+                    if (msg.fileOfferData.seederNodeId == msg.fileOfferData.fileInfo.originNodeId) {
+                        this.addMessage(msg);
+                    }
+                    break;
+                case PoolMessage_Type.MEDIA_OFFER:
+                    if (!msg.mediaOfferData) return;
+                    switch (msg.mediaOfferData.mediaType) {
+                        case PoolMediaType.IMAGE:
+                            let imageData: PoolImageData | undefined = msg.mediaOfferData.imageData;
+                            let fileOffer: PoolFileOffer | undefined = msg.mediaOfferData.fileOffer;
+                            if (!imageData || !fileOffer?.fileInfo) return;
+                            if (fileOffer.fileInfo.totalSize > this.getPool().poolSettings.maxMediaSize) break;
+                            this.addAvailableFileOffer(fileOffer);
+                            if (fileOffer.seederNodeId != this.nodeID) {
+                                FileManager.addFileDownload(this.poolID, this.poolKey, fileOffer.fileInfo, true);
+                                // let addDownloadAction: AddDownloadAction = {
+                                //     key: this.poolKey,
+                                //     fileOffer: imageData,
+                                // };
+                                // store.dispatch(poolAction.addDownload(addDownloadAction));
+                            }
+                            this.addMessage(msg);
+                            break;
+                        default:
+                            return;
+                    }
+                    break;
+                case PoolMessage_Type.RETRACT_FILE_OFFER:
+                    if (!msg.retractFileOfferData) return;
+                    this.removeAvailableFileOffer(msg.retractFileOfferData.fileId, msg.retractFileOfferData.nodeId);
+                    break;
+                case PoolMessage_Type.MEDIA_HINT_REQUEST:
+                    if (!msg.mediaHintRequestData) return;
+                    this.sendMediaHintReply(src.nodeId, msg.mediaHintRequestData);
+                    break;
+                default:
+                    return;
             }
         }
         
-        let data = JSON.stringify(messagePackage);
-        this.broadcastMessage(data, src, dests, fromNodeID, partnerIntPath);
+        this.broadcastMessage(msgPkgBundle, fromNodeID);
     }
 
-    async handleBinaryMessage(binaryData: ArrayBuffer, fromNodeID: string = this.nodeID) {
-        let data = new Uint8Array(binaryData);
-
-        let parsedMsg = parseBinaryMessage(data)
-        if (!parsedMsg) return; //report
-
-        //let { payload, fileID, chunkNumber, src, dests } = parsedMsg;
-
-        if (parsedMsg.payload.byteLength == 0) return;
-        let fileSize = this.availableFiles.get(parsedMsg.fileID)?.fileSeeders.totalSize;
-
-        // 1 step/8mb buffer: 46,272ms
-        // 3 steps/8mb buffer/1.6mb cache chunk: 82,475ms
-        // 3 steps/16mb buffer/1.6mb cache chunk: 76,214ms (WILL SOMETIMES STUTTER DUE TO 16 MB BUFFER)
-        // 3 steps/16mb buffer/16mb cache chunk: 166,008ms (stutter)
-        // 3 steps/16mb buffer/160KB cache chunk: 112,690ms (stutter)
-        // 3 steps/15mb buffer/1.6mb cache chunk: 76,611ms (SEEMS LIKE BEST OPTION (roughly))
-        // 3 steps/15mb buffer/16mb cache chunk: 79,512ms
-        // 3 steps/15mb buffer/160KB cache chunk: 76,818ms
-        // 3 steps/15mb buffer/15mb cache chunk: 77,322ms
-        // 3 steps/15mb buffer/8mb cache chunk: 75,714ms (this will be problematic with like 3 files, as it will easily block)
-        // 3 steps/15mb buffer/1mb cache chunk: 76,611ms (This is best OPTION) (!)
-
-        // NO PROMISES:
-        // 1 step/15mb buffer: 34,287ms
-        // 3 steps/15mb buffer/16KB cache chunk: 77,032ms
-        // 3 steps/15mb buffer/128KB cache chunk: 77,439ms, 77,423ms, 76,578ms
-        // 3 steps/15mb buffer/1mb cache chunk: 75,470ms, 76,969ms, 77,495ms
-        // Yeah the cache chunk sizes don't affect it that much, so 1mb cache chunk seems pretty good
-
-        // FIRST CACHE:
-        // Same panel, 1 node: 50,470ms
-        // 2 nodes, different panel, 1 parent cluster: 124,821ms
-        // 8 nodes, all different panel, 1 parent cluster: 247,406ms
-        // 26 nodes, 2 levels: 771,152ms
-
-        // CACHING IN EFFECT (same travel distance as first cache):
-        // Same panel, 1 node: 21,146ms
-        // 2 nodes, different panel, 1 parent cluster: 43,186ms
-        // 8 nodes, all different panel, 1 parent cluster: 164,994ms
-        // 26 nodes, 2 levels: 490,083ms
-
-        // FIRST CACHE (Webworkers):
-        // Same panel, 1 node: 46,877ms
-        // 2 nodes, different panel, 1 parent cluster: 69,181ms
-        // 26 nodes, 2 levels: 704,035ms
-
-        // CACHING IN EFFECT (Webworkers):
-        // Same panel, 1 node: 21,968ms
-        // 8 nodes, all different panel, 1 parent cluster: 99,866ms
-        // 26 nodes, 2 levels: 392,552ms
+    async handleChunkMessage(msgPkgBundle: PoolMessagePackageBundle, fromNodeID: string = this.nodeID) {
+        let msgPkg = msgPkgBundle.msgPkg;
+        let encodedMsgPkg = msgPkgBundle.encodedMsgPkg;
+        if (!msgPkg.chunkInfo) return;
+        let chunkInfo: PoolChunkInfo = msgPkg.chunkInfo;
+        let fileSize = this.availablefileSeeders.get(chunkInfo.fileId)?.fileInfo?.totalSize;
 
         // MAIN CASES TO TEST
         // Center Cluster, all request
@@ -1426,66 +1520,76 @@ export class PoolClient {
         // Center Cluster, remove nodes: [1, 2, 5, 6, 7, 8] 1 node in one panel, 2 nodes in other panel, different partnerInt
         // 1 Child node to Center Cluster
 
-        // console.log("BINARY MSG RECV:", payload.byteLength, msgID, fileID, chunkNumber, dests);
-        // console.log("FORWARD CHUNKNUMBER", parsedMsg.chunkNumber, parsedMsg.dests);
+        // console.log("Received chunk", chunkInfo.chunkNumber);
 
-        //let isADest = false;
-        let partnerIntPath = getCacheChunkNumberFromChunkNumber(parsedMsg.chunkNumber) % 3;
-        if (parsedMsg.dests) {
+        let partnerIntPath = getPartnerIntFromCacheChunkNumber(getCacheChunkNumberFromChunkNumber(chunkInfo.chunkNumber));
+        if (partnerIntPath != msgPkg.partnerIntPath) {
+            // console.log("Not same partnerIntPath", chunkInfo.chunkNumber, partnerIntPath, msgPkg.partnerIntPath);
+            return;
+        }
+
+        if (msgPkg.dests.length != 0) {
             let forwardMessage = true;
-            if (this.checkAtMyDest(parsedMsg.dests)) {
-                FileManager.addFileChunk(parsedMsg.fileID, parsedMsg.chunkNumber, parsedMsg.payload);
-                if (parsedMsg.dests.length != 1) {
-                    // if (partnerIntPath != this.nodePosition.PartnerInt) console.log("GOT MY FILE CHUNK, SENDING TO DESTS", dests) // Problem, is it's sending to other panels of a partnerInt that is not itself
-                    //isADest = true;
-                    //data = createBinaryMessage(payload, msgID, fileID, chunkNumber, src, dests);
-                    setBinaryMessageDestVisited(data, parsedMsg, this.nodeID);
+            let tempChunk: Uint8Array | undefined = undefined;
+            if (this.checkAtMyDest(msgPkg.dests)) {
+                if (!tempChunk) tempChunk = this.getChunkFromMessagePackage(encodedMsgPkg);
+                FileManager.addFileChunk(chunkInfo.fileId, chunkInfo.chunkNumber, tempChunk);
+                if (msgPkg.dests.length > 1) {
+                    setMessagePackageDestVisited(encodedMsgPkg, this.nodeID);
                 } else {
                     forwardMessage = false;
                 }
             }
 
             if (partnerIntPath == this.nodePosition.partnerInt && fileSize) {
-                FileManager.cacheFileChunk(parsedMsg.fileID, parsedMsg.chunkNumber, fileSize, parsedMsg.payload)
+                if (!tempChunk) tempChunk = this.getChunkFromMessagePackage(encodedMsgPkg);
+                FileManager.cacheFileChunk(chunkInfo.fileId, chunkInfo.chunkNumber, fileSize, tempChunk)
             }
 
             if (!forwardMessage) return;
 
         } else {
-            FileManager.addFileChunk(parsedMsg.fileID, parsedMsg.chunkNumber, parsedMsg.payload);
+            FileManager.addFileChunk(chunkInfo.fileId, chunkInfo.chunkNumber, this.getChunkFromMessagePackage(encodedMsgPkg));
         }
         
-        this.broadcastMessage(data, parsedMsg.src, parsedMsg.dests, fromNodeID, partnerIntPath);
+        this.broadcastMessage(msgPkgBundle, fromNodeID);
     }
 
     ////////////////////////////////////////////////////////////////
     // Data channel functions
     ////////////////////////////////////////////////////////////////
 
-    broadcastMessage(data: string | Uint8Array, src: PoolMessageSourceInfo, dests: PoolMessageDestinationInfo[] | undefined, fromNodeID: string, partnerIntPath: number | null = null) {
+    broadcastMessage(msgPkgBundle: PoolMessagePackageBundle, fromNodeID: string = this.nodeID) {
+        let msgPkg = msgPkgBundle.msgPkg;
+        let src = msgPkg.src;
+        let dests = msgPkg.dests;
+        let hasDests = dests.length != 0;
+        let partnerIntPath = msgPkg.partnerIntPath;
+        let hasPartnerIntPath = partnerIntPath != undefined;
+        if (!src) return;
+
         let panelNumber = this.getPanelNumber();
         let sent = false;
-        let restrictToOwnPanel = partnerIntPath != null && src.nodeID != this.nodeID && partnerIntPath != this.nodePosition.partnerInt;
-        let srcPath = this.activeNodes.get(src.nodeID);
+        let restrictToOwnPanel = hasPartnerIntPath && src.nodeId != this.nodeID && partnerIntPath != this.nodePosition.partnerInt;
+        let srcPath = this.activeNodes.get(src.nodeId);
         if (!srcPath) srcPath = src.path;
 
         //if (typeof data == 'string') console.log("MSG SEND", data);
         // console.log("DC SEND")
 
-        if (dests) {
+        if (hasDests) {
             for (let i = 0; i < 3; i++) {
                 let nodeID = this.nodePosition.parentClusterNodeIDs[panelNumber][i];
                 if (i != this.nodePosition.partnerInt && nodeID != "") {
-                    //if (partnerIntPath == null || (i == partnerIntPath && !isADest)) {
-                    if (partnerIntPath == null || (i == partnerIntPath && nodeID != fromNodeID)) {
-                        this.sendDataChannel(nodeID, data);
+                    if (!hasPartnerIntPath || (i == partnerIntPath && nodeID != fromNodeID)) {
+                        this.sendDataChannel(nodeID, msgPkgBundle);
                         sent = true;
                         break;
                     } 
                 }
             }
 
-            if (partnerIntPath != null && sent) return;
+            if (hasPartnerIntPath && sent) return;
 
             // console.log("Sending to", partnerIntPath)
 
@@ -1506,21 +1610,17 @@ export class PoolClient {
                     if (restrictToOwnPanel && i != panelNumber) continue;
                     for (let j = 0; j < 3; j++) {
                         let nodeID = this.nodePosition.parentClusterNodeIDs[i][j];
-                        if (nodeID != "" && nodeID != this.nodeID && nodeID == dests[destIndex].nodeID) {
-                            //parentClusterDirection[i].push(dests[destIndex]);
-                            // if (!modifiedDests) dests = dests.slice();
-                            // modifiedDests = true;
-                            // dests.splice(destIndex, 1);
+                        if (nodeID != "" && nodeID != this.nodeID && nodeID == dests[destIndex].nodeId) {
                             if (i == panelNumber && j != this.nodePosition.partnerInt) {
                                 // Sets boundaries to when it's allowed to send to its own panel
                                 if (
-                                    partnerIntPath == null || 
+                                    !hasPartnerIntPath || 
                                     this.nodePosition.partnerInt == partnerIntPath || 
                                     partnerIntPath == j || 
-                                    this.nodePosition.parentClusterNodeIDs[panelNumber][partnerIntPath] == ""
+                                    this.nodePosition.parentClusterNodeIDs[panelNumber][partnerIntPath!] == ""
                                 ) {
                                     //console.log("SENDING TO SAME PANEL:", nodeID);
-                                    this.sendDataChannel(nodeID, data);
+                                    this.sendDataChannel(nodeID, msgPkgBundle);
                                 }
                             } else {
                                 this.panelSwitches[0][i] = true;                                
@@ -1534,7 +1634,7 @@ export class PoolClient {
 
                 if (found || restrictToOwnPanel) continue;
 
-                let destPath = this.activeNodes.get(dests[destIndex].nodeID);
+                let destPath = this.activeNodes.get(dests[destIndex].nodeId);
                 if (!destPath) continue;
 
                 let matches = 0;
@@ -1569,27 +1669,17 @@ export class PoolClient {
             let direction = this.getDirectionOfMessage(srcPath);
 
             if (direction == MessageDirection.PARENT || direction == MessageDirection.BOTH) {
-                // for (let i = 0; i < parentClusterDirection.length; i++) {
-                //     if (i != panelNumber && parentClusterDirection[i].length != 0) {
-                //         if (this.sendToParentClusterPanel(i, data, partnerIntPath)) sent = true;
-                //     }
-                // }
                 for (let i = 0; i < this.panelSwitches[0].length; i++) {
                     if (i != panelNumber && this.panelSwitches[0][i]) {
-                        if (this.sendToParentClusterPanel(i, data, partnerIntPath)) sent = true;
+                        if (this.sendToParentClusterPanel(i, msgPkgBundle)) sent = true;
                     }
                 }
             }
 
             if (direction == MessageDirection.CHILD || direction == MessageDirection.BOTH) {  
-                // for (let i = 0; i < childClusterDirection.length; i++) {
-                //     if (childClusterDirection[i].length != 0) {
-                //         if (this.sendToChildClusterPanel(i, data, partnerIntPath)) sent = true;
-                //     }
-                // }
                 for (let i = 0; i < this.panelSwitches[1].length; i++) {
                     if (this.panelSwitches[1][i]) {
-                        if (this.sendToChildClusterPanel(i, data, partnerIntPath)) sent = true;
+                        if (this.sendToChildClusterPanel(i, msgPkgBundle)) sent = true;
                     }
                 }
             }
@@ -1600,13 +1690,13 @@ export class PoolClient {
                     if (
                         nodeID != fromNodeID && 
                         (
-                            partnerIntPath == null || 
+                            !hasPartnerIntPath || 
                             this.nodePosition.partnerInt == partnerIntPath || 
                             partnerIntPath == i || 
-                            this.nodePosition.parentClusterNodeIDs[panelNumber][partnerIntPath] == ""
+                            this.nodePosition.parentClusterNodeIDs[panelNumber][partnerIntPath!] == ""
                         )
                     ) {
-                        this.sendDataChannel(nodeID, data);
+                        this.sendDataChannel(nodeID, msgPkgBundle);
                         sent = true;
                     } 
                 }
@@ -1623,14 +1713,14 @@ export class PoolClient {
             if (direction == MessageDirection.PARENT || direction == MessageDirection.BOTH) {
                 for (let i = 0; i < 3; i++) {
                     if (i != panelNumber) {
-                        if (this.sendToParentClusterPanel(i, data, partnerIntPath)) sent = true;
+                        if (this.sendToParentClusterPanel(i, msgPkgBundle)) sent = true;
                     }
                 }
             }
 
             if (direction == MessageDirection.CHILD || direction == MessageDirection.BOTH) {
                 for (let i = 0; i < 2; i++) {
-                    if (this.sendToChildClusterPanel(i, data, partnerIntPath)) sent = true;
+                    if (this.sendToChildClusterPanel(i, msgPkgBundle)) sent = true;
                 }
             }
         }
@@ -1688,33 +1778,34 @@ export class PoolClient {
                     this.sendLatestRequest(targetNodeID);
                 }
             }
+            this.cleanMissedMessages();
             this.flushDCBufferQueue(nodeConnection);
         }
 
-        nodeConnection.dataChannel.onmessage = (e: MessageEvent<string | ArrayBuffer>) => {
+        nodeConnection.dataChannel.onmessage = (e: MessageEvent<ArrayBuffer>) => {
             // console.log("DC RECV", e.data, e.type);
             // console.log("DC RECV FROM:", targetNodeID, e.data);
-            if (typeof e.data == 'string') {
-                if (e.data == "") return;
-                let msg: PoolMessagePackage = JSON.parse(e.data);
-                if (msg.src.nodeID == this.nodeID) return;
-                this.handleMessage(msg, targetNodeID);
-            } else {
-                // console.log("DC RECV ARRAY BUFFER FROM", targetNodeID);
-                this.handleBinaryMessage(e.data, targetNodeID);
+            if (e.data.byteLength == 0) return;
+            let encodedMsgPkg: Uint8Array = new Uint8Array(e.data);
+            let msgPkg: PoolMessagePackage = PoolMessagePackage.decode(encodedMsgPkg);
+            let msgPkgBundle: PoolMessagePackageBundle = {
+                encodedMsgPkg,
+                msgPkg,
+            }
+            if (!msgPkg.src) return;
+            if (msgPkg.src.nodeId == this.nodeID) return;
+            if (msgPkg.msg) {
+                this.handleMessage(msgPkgBundle, targetNodeID);
+            } else if (msgPkg.chunkInfo) {
+                this.handleChunkMessage(msgPkgBundle, targetNodeID);
             }
         }
 
         nodeConnection.dataChannel.onclose = (e) => {
             reportNodeDisconnect(this.ws, targetNodeID);
-            //SendSSMessage(this.ws, 2006, { ReportCode: SSReportCodes.DISCONNECT_REPORT } as SSReportNodeData, undefined, targetNodeID);
             let dataChannelBufferQueue = this.DCBufferQueues[nodeConnection.position];
             for (let i = 0; i < dataChannelBufferQueue.length; i++) {
                 if (this.reconnect) {
-                    // check if nodePosition has a node that is supposed to be there -> do nothing (else empty buffer queue)
-                    // every updateNodePosition should update each bufferQueue if empty
-                    // Think about whether emit/bufferObject is needed? Is there another way to manage buffers (like global "bufferOverloading paramater")
-                    // Keep track of total buffer (add buffer and remove buffer should be controlled)
                     let replacedNodeID: string | undefined = this.getNodeFromPosition(nodeConnection.position);
                     if (replacedNodeID && replacedNodeID != "" && replacedNodeID != targetNodeID) {
                         let replacedNodeConnection = this.nodeConnections.get(replacedNodeID);
@@ -1722,62 +1813,64 @@ export class PoolClient {
                             this.flushDCBufferQueue(replacedNodeConnection);
                         }
                     }
-                    //this.broadcastMessage(nodeConnection.dataChannelBufferQueue[i], src, nodeConnection.dataChannelBufferQueue[i].resendDests, nodeConnection.dataChannelBufferQueue[i].isADest, this.nodePosition.PartnerInt);
                 }
             }
+            this.cleanMissedMessages();
         }
     }
 
-    private sendDataChannel(nodeID: string, data: string | Uint8Array): boolean {
+    private sendDataChannel(nodeID: string, msgPkgBundle: PoolMessagePackageBundle): boolean {
         if (nodeID == "") return false;
         let nc = this.nodeConnections.get(nodeID);
         if (!nc) return false;
         if (nc.dataChannel.readyState == 'open') {
-            //console.log("DC SEND", nodeID, typeof data == 'string' ? data : "ARRAY BUFFER");
-            if (typeof data != 'string') {
+            // console.log("DC SEND", nodeID);
+            if (msgPkgBundle.msgPkg.chunkInfo) {
                 if (nc.dataChannel.bufferedAmount >= MAXIMUM_DC_BUFFER_SIZE || !this.checkBufferQueueIsEmpty(nc.position)) {
                     //console.log("BUFFER SIZE", nc.dataChannel.bufferedAmount, MAXIMUM_DC_BUFFER_SIZE);
-                    this.addToDCBufferQueue(nc.position, data);
+                    this.addToDCBufferQueue(nc.position, msgPkgBundle.encodedMsgPkg);
                     return true;
                 }
                 //console.log("DC SEND BUFFER")
-                nc.dataChannel.send(data);
-            } else {
-                nc.dataChannel.send(data);
             }
+            nc.dataChannel.send(msgPkgBundle.encodedMsgPkg);
             return true;
         } else if (nc.dataChannel.readyState == 'connecting') {
-            if (typeof data != 'string') {
+            if (msgPkgBundle.msgPkg.chunkInfo) {
                 //console.log("PUSHING BEFORE DC OPEN")
-                this.addToDCBufferQueue(nc.position, data);
+                this.addToDCBufferQueue(nc.position, msgPkgBundle.encodedMsgPkg);
                 return true
             }
         }
         return false;
     }
 
-    private sendToParentClusterPanel(panelNumber: number, data: string | Uint8Array, partnerIntPath: number | null = null): boolean {
+    private sendToParentClusterPanel(panelNumber: number, msgPkgBundle: PoolMessagePackageBundle): boolean {
         let sent = false;
-        if (partnerIntPath != null) {
-            if (this.sendDataChannel(this.nodePosition.parentClusterNodeIDs[panelNumber][partnerIntPath], data)) return true;
+        let partnerIntPath = msgPkgBundle.msgPkg.partnerIntPath;
+        let hasPartnerIntPath = partnerIntPath != undefined;
+        if (hasPartnerIntPath) {
+            if (this.sendDataChannel(this.nodePosition.parentClusterNodeIDs[panelNumber][partnerIntPath!], msgPkgBundle)) return true;
         }
         for (let i = 0; i < 3; i++) {
-            if (this.sendDataChannel(this.nodePosition.parentClusterNodeIDs[panelNumber][i], data)) sent = true;
-            if (partnerIntPath != null && sent) {
+            if (this.sendDataChannel(this.nodePosition.parentClusterNodeIDs[panelNumber][i], msgPkgBundle)) sent = true;
+            if (hasPartnerIntPath && sent) {
                 return true;
             }
         }
         return sent;
     }
 
-    private sendToChildClusterPanel(panelNumber: number, data: string | Uint8Array, partnerIntPath: number | null = null): boolean {
+    private sendToChildClusterPanel(panelNumber: number, msgPkgBundle: PoolMessagePackageBundle): boolean {
         let sent = false;
-        if (partnerIntPath != null) {
-            if (this.sendDataChannel(this.nodePosition.childClusterNodeIDs[panelNumber][partnerIntPath], data)) return true;
+        let partnerIntPath = msgPkgBundle.msgPkg.partnerIntPath;
+        let hasPartnerIntPath = partnerIntPath != undefined;
+        if (hasPartnerIntPath) {
+            if (this.sendDataChannel(this.nodePosition.childClusterNodeIDs[panelNumber][partnerIntPath!], msgPkgBundle)) return true;
         }
         for (let i = 0; i < 3; i++) {
-            if (this.sendDataChannel(this.nodePosition.childClusterNodeIDs[panelNumber][i], data)) sent = true;
-            if (partnerIntPath != null && sent) {
+            if (this.sendDataChannel(this.nodePosition.childClusterNodeIDs[panelNumber][i], msgPkgBundle)) sent = true;
+            if (hasPartnerIntPath && sent) {
                 return true;
             }
         }
@@ -1817,6 +1910,24 @@ export class PoolClient {
             return undefined;
         }
         return nodeID;
+    }
+
+    private cleanMissedMessages(orAddMessage?: PoolMessage): boolean {
+        let cleaned = true;
+        this.nodeConnections.forEach((nodeConnection) => {
+            if (nodeConnection.dataChannel.readyState == 'connecting') {
+                cleaned = false;
+            }
+        });
+        // console.log("Cleaned missed messages", cleaned);
+        if (cleaned) {
+            if (this.missedMessages.length != 0) {
+                this.missedMessages = [];
+            }
+        } else if (orAddMessage) {
+            this.missedMessages.push(orAddMessage);
+        }
+        return cleaned;
     }
 
     ////////////////////////////////////////////////////////////////
@@ -1876,8 +1987,10 @@ export class PoolClient {
         this.triggerDCBufferAvailableToFill();
     }
 
+    // This will trigger frequently which is ok because we don't want any data channels sitting idle
+    // due to the fact that curDCBufferQueueLength is shared
     private triggerDCBufferAvailableToFill() {
-        //console.log("PRE TRIGGER DC BUFFER FILL", this.curDCBufferQueueLength, this.maxDCBufferQueueLength - LOW_BUFFER_THRESHOLD);
+        // console.log("PRE TRIGGER DC BUFFER FILL", this.curDCBufferQueueLength, this.maxDCBufferQueueLength - LOW_BUFFER_THRESHOLD);
         if (this.curDCBufferQueueLength < this.maxDCBufferQueueLength - LOW_BUFFER_THRESHOLD) {
             //console.log("TRIGGER DC BUFFER FILL");
             this.DCBufferQueueEventEmitter.emit(DC_BUFFER_AVAILABLE_TO_FILL_NAME);
@@ -1905,28 +2018,27 @@ export class PoolClient {
             if (msg.created && this.receivedMessages[i].created < msg.created) {
                 break;
             } else {
-                if (this.receivedMessages[i].msgID == msg.msgID) {
+                if (this.receivedMessages[i].msgID == msg.msgId) {
                     poolMessageExists = true;
                 }
             }
         }
 
         //console.log(poolMessageExists);
-
         if (poolMessageExists) return true;
 
-        // this.receivedMessages.push({
-        //     msgID: msg.msgID,
-        //     created: msg.created,
-        // });
+        let msgInfo: PoolMessageInfo = {
+            msgID: msg.msgId,
+            created: msg.created,
+        }
 
         if (this.receivedMessages.length == 0) {
-            this.receivedMessages.push(msg);
+            this.receivedMessages.push(msgInfo);
             return false;
         }
         for (let i = this.receivedMessages.length; i >= 0; i--) {
             if (i == 0 || msg.created >= this.receivedMessages[i - 1].created) {
-                this.receivedMessages.splice(i, 0, msg);
+                this.receivedMessages.splice(i, 0, msgInfo);
                 break;
             }
         }
@@ -1940,14 +2052,10 @@ export class PoolClient {
 
     private addMessage(message: PoolMessage) {
         //console.log("ADDING MESSAGE", message);
-        // let copyMessage: PoolMessage = {
-        //     msgID: message.msgID,
-        //     type: message.type,
-        //     userID: message.userID,
-        //     created: message.created,
-        //     data: message.data,
-        //     received: Date.now(),
-        // };
+        // if (this.isPromoting) { // this.isPromoting
+        //     this.missedMessages.push(message);
+        // }
+        this.cleanMissedMessages(message);
         store.dispatch(poolAction.addMessage({
             key: this.poolKey,
             message: message,
@@ -1963,20 +2071,14 @@ export class PoolClient {
     private addMessages(messages: PoolMessage[]) {
         for (const message of messages) {
             if (!this.checkMessageDuplicate(message)) {
-                if (message.type == PoolMessageType.FILE_OFFER || message.type == PoolMessageType.IMAGE_OFFER) {
-                    this.addAvailableFileOffer(message.data);
+                if (message.type == PoolMessage_Type.FILE_OFFER) {
+                    if (!message.fileOfferData) continue;
+                    this.addAvailableFileOffer(message.fileOfferData);
+                } else if (message.type == PoolMessage_Type.MEDIA_OFFER) {
+                    if (!message.mediaOfferData?.fileOffer) continue;
+                    this.addAvailableFileOffer(message.mediaOfferData.fileOffer);
                 }
                 this.addMessage(message);
-
-                // if (messages[i].type == PoolMessageType.NODE_STATUS) {
-                //     if (messages[i].data.state == PoolNodeState.ACTIVE) {
-                //         this.addActiveNodeMessage(messages[i]);
-                //     } else if (messages[i].data.state == PoolNodeState.INACTIVE) {
-                //         this.removeActiveNodeMessage(messages[i]);
-                //     }
-                // } else {
-                //     this.addMessage(messages[i]);
-                // }
             }
         }
     }
@@ -1985,31 +2087,31 @@ export class PoolClient {
         return nodeID + timestamp + state.toString();
     }
 
-    private checkAtMyDest(dests: PoolMessageDestinationInfo[]): boolean {
+    private checkAtMyDest(dests: PoolMessagePackageDestinationInfo[]): boolean {
         for (let i = 0; i < dests.length; i++) {
-            if (dests[i].nodeID == this.nodeID) {
+            if (dests[i].nodeId == this.nodeID) {
                 return !dests[i].visited;
             }
         }
         return false;
     }
 
-    private getSrc(): PoolMessagePackage_SourceInfo {
+    private getSrc(): PoolMessagePackageSourceInfo {
         return {
             nodeId: this.nodeID,
             path: this.nodePosition.path,
         };
     }
 
-    private getDests(destNodeIDs: string[] | string): PoolMessagePackage_DestinationInfo[] {
+    private getDests(destNodeIDs: string[] | string): PoolMessagePackageDestinationInfo[] {
         if (typeof destNodeIDs == 'string') {
             destNodeIDs = [destNodeIDs];
         }
-        let dests: PoolMessagePackage_DestinationInfo[] = [];
+        let dests: PoolMessagePackageDestinationInfo[] = [];
         for (let i = 0; i < destNodeIDs.length; i++) {
-            let dest: PoolMessagePackage_DestinationInfo = {
+            let dest: PoolMessagePackageDestinationInfo = {
                 nodeId: destNodeIDs[i],
-                visited: false,
+                visited: destNodeIDs[i] == this.nodeID,
             };
             dests.push(dest);
         }
@@ -2026,27 +2128,42 @@ export class PoolClient {
         return msg;
     }
 
-    private createNewMessagePackage(destNodeIDs?: string[] | string, partnerIntPath: number | undefined = undefined): PoolMessagePackage {
+    private createNewMessagePackage(destNodeIDs?: string[] | string, partnerIntPath?: number): PoolMessagePackage {
         let src = this.getSrc();
         let dests = destNodeIDs ? this.getDests(destNodeIDs) : [];
         let messagePackage: PoolMessagePackage = {
             src,
             dests,
-            partnerIntPath,
+            // hasPartnerIntPath: partnerIntPath != undefined,
+            partnerIntPath: partnerIntPath,
         }
         return messagePackage;
     }
 
-    private createMessagePackage(msg: PoolMessage, destNodeIDs?: string[] | string, partnerIntPath: number | undefined = undefined) {
+    private createMessagePackageBundle(msg: PoolMessage, destNodeIDs?: string[] | string, partnerIntPath?: number): PoolMessagePackageBundle {
         let msgPkg: PoolMessagePackage = this.createNewMessagePackage(destNodeIDs, partnerIntPath);
         msgPkg.msg = msg;
-        return msgPkg;
+        return {
+            msgPkg,
+            encodedMsgPkg: PoolMessagePackage.encode(msgPkg).finish(),
+        };
     }
 
-    private createFileChunkMessagePackage(fileChunkMsg: PoolFileChunkMessage, destNodeIDs?: string[] | string, partnerIntPath: number | undefined = undefined) {
+    private createChunkMessagePackageBundle(chunkInfo: PoolChunkInfo, chunk: Uint8Array, destNodeIDs?: string[] | string): PoolMessagePackageBundle {
+        let partnerIntPath = getPartnerIntFromCacheChunkNumber(getCacheChunkNumberFromChunkNumber(chunkInfo.chunkNumber));
         let msgPkg: PoolMessagePackage = this.createNewMessagePackage(destNodeIDs, partnerIntPath);
-        msgPkg.fileChunkMsg = fileChunkMsg;
-        return msgPkg;
+        msgPkg.chunkInfo = chunkInfo;
+        msgPkg.partnerIntPath = partnerIntPath;
+        let msgPkgWithChunk: PoolMessagePackageWithChunk = msgPkg;
+        msgPkgWithChunk.chunk = chunk;
+        return {
+            msgPkg,
+            encodedMsgPkg: PoolMessagePackageWithChunk.encode(msgPkgWithChunk).finish(),
+        };
+    }
+
+    private getChunkFromMessagePackage(encodedMsgPkg: Uint8Array): Uint8Array {
+        return PoolMessagePackageWithOnlyChunk.decode(encodedMsgPkg).chunk || new Uint8Array();
     }
 
     ////////////////////////////////////////////////////////////////

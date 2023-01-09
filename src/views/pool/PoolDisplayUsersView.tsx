@@ -3,7 +3,7 @@ import { IndicatorDot } from "../components/IndicatorDot";
 
 import AccordionArrowIcon from '../../assets/accordion-arrow.png';
 import { PoolUserActiveDevices } from "./PoolView";
-import { fileSizeToString } from "../../helpers/file-size";
+import { fileSizeToString } from "../../utils/file-size";
 
 import BrowserIcon from '../../assets/browser.png';
 import DesktopIcon from '../../assets/desktop.png';
@@ -23,7 +23,7 @@ export const PoolDisplayUsersView = memo(PoolDisplayUsersViewComponent);
 
 function PoolDisplayUsersViewComponent({ poolID, users, userMap, hidden }: PoolDisplayUsersViewParams) {
 
-    const openAccordionUsersMap = useRef<Map<string, boolean>>(new Map<string, boolean>).current;
+    const openAccordionUsersMap = useRef<Map<string, boolean>>(new Map<string, boolean>()).current;
     const [ accordionsOpened, setAccordionsOpened ] = useState<number>(0);
 
     const toggleAccordion = (userID: string) => {
@@ -67,11 +67,11 @@ function PoolDisplayUsersViewComponent({ poolID, users, userMap, hidden }: PoolD
                                                             <span>{node.deviceName}</span>
                                                         </div>
                                                         {
-                                                            userActiveDevices?.activeDevices?.get(node.deviceId)?.fileOffers.map((fileOffer) => (
+                                                            userActiveDevices?.activeDevices?.get(node.deviceId)?.fileOffersInfo.map((fileInfo) => (
                                                                 // PoolFileInfo type (change in model)
-                                                                <div className="display-user-device-file-offer" key={fileOffer.fileID}>
-                                                                    <span className="display-user-device-file-name" onClick={() => PoolManager.sendRequestFileToPool(poolID, fileOffer)}>{fileOffer.fileName}</span> 
-                                                                    <span className="display-user-device-file-size">{fileSizeToString(fileOffer.totalSize)}</span>
+                                                                <div className="display-user-device-file-offer" key={fileInfo.fileId}>
+                                                                    <span className="display-user-device-file-name" onClick={() => PoolManager.sendFileRequestToPool(poolID, fileInfo)}>{fileInfo.fileName}</span> 
+                                                                    <span className="display-user-device-file-size">{fileSizeToString(fileInfo.totalSize)}</span>
                                                                 </div>
                                                             ))
                                                         }

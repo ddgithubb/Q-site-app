@@ -1,6 +1,7 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { DEFAULT_MESSAGES_CACHE, DEFAULT_RECV_MESSAGES_CACHE } from "../../config/caching";
-import { PoolNodeState, Pool, PoolInfo, PoolUpdateLatestInfo, PoolMessagePackage, PoolMessageType, PoolNode, PoolConnectionState, PoolFileInfo, isMediaType, PoolDownloadProgressStatus, PoolMessage, PoolFileOffer, PoolFileSeeders } from "../../pool/pool.model";
+import { Pool, PoolConnectionState, PoolDownloadProgressStatus, PoolInfo, PoolNode } from "../../pool/pool.model";
+import { PoolMessage, PoolFileInfo, PoolFileOffer } from "../../pool/pool.v1";
 import { PoolDeviceInfo, PoolUserInfo } from "../../pool/sync_server.v1";
 
 export interface PoolsState {
@@ -51,23 +52,13 @@ export interface RemoveActiveNodeAction extends PoolAction {
     nodeID: string;
 }
 
-// export interface UpdateActiveNodesAction extends PoolAction {
-//     activeNodes: PoolNode[];
-// }
-
 export interface AddDownloadAction extends PoolAction {
     fileInfo: PoolFileInfo;
 }
 
-export interface UpdateDownloadProgressAction extends PoolAction {
-    fileID: string;
-    progress: number;
-}
-
-export interface UpdateDownloadProgressStatusAction extends PoolAction {
+export interface updateDownloadSeederNodeIDAction extends PoolAction {
     fileID: string;
     seederNodeID: string;
-    status: PoolDownloadProgressStatus;
 }
 
 export interface RemoveDownloadAction extends PoolAction {
@@ -88,7 +79,6 @@ const poolSlice = createSlice({
                     poolSettings: poolsInfo[i].settings,
                     key: i,
                     connectionState: PoolConnectionState.CLOSED,
-                    myNode: {} as PoolNode,
                     activeNodes: [],
                     downloadQueue: [],
                     messages: [],
@@ -154,7 +144,7 @@ const poolSlice = createSlice({
         addMessage(state: PoolsState, action: PayloadAction<AddMessageAction>) {
             let pool = getPool(state, action);
             let msg: PoolMessage = action.payload.message;
-            msg.received = Date.now();
+            // msg.received = Date.now();
             //console.log("ADDING MESSAGE", msg, msg.created, pool.messages[0]?.created)
             if (pool.messages.length == 0) {
                 pool.messages.push(msg);
@@ -176,9 +166,6 @@ const poolSlice = createSlice({
         },
         addActiveNode(state: PoolsState, action: PayloadAction<AddActiveNodeAction>) {
             let pool = getPool(state, action);
-            // if (action.payload.myNode) {
-            //     pool.myNode = action.payload.node;
-            // }
             pool.activeNodes.push(action.payload.node);
         },
         removeActiveNode(state: PoolsState, action: PayloadAction<RemoveActiveNodeAction>) {
@@ -193,30 +180,21 @@ const poolSlice = createSlice({
         },
         addFileOffer(state: PoolsState, action: PayloadAction<AddFileOfferAction>) {
             let pool = getPool(state, action);
-            // if (action.payload.fileOffer.nodeID == pool.myNode.nodeID) {
-            //     pool.myNode.fileOffers.unshift(action.payload.fileOffer);
-            // }
+            if (!action.payload.fileOffer.fileInfo) return;
             for (const node of pool.activeNodes) {
-                if (node.nodeID == action.payload.fileOffer.seederNodeID) {
-                    node.fileOffers.unshift(action.payload.fileOffer);
+                if (node.nodeID == action.payload.fileOffer.seederNodeId) {
+                    node.fileOffersInfo.unshift(action.payload.fileOffer.fileInfo);
                     break;
                 }
             }
         },
         removeFileOffer(state: PoolsState, action: PayloadAction<RemoveFileOfferAction>) {
             let pool = getPool(state, action);
-            // if (action.payload.nodeID == pool.myNode.nodeID) {
-            //     for (let i = 0; i < pool.myNode.fileOffers.length; i++) {
-            //         if (pool.myNode.fileOffers[i].fileID == action.payload.fileID) {
-            //             pool.myNode.fileOffers.splice(i, 1);
-            //         }
-            //     }
-            // }
             for (const node of pool.activeNodes) {
                 if (node.nodeID == action.payload.nodeID) {
-                    for (let i = 0; i < node.fileOffers.length; i++) {
-                        if (node.fileOffers[i].fileID == action.payload.fileID) {
-                            node.fileOffers.splice(i, 1);
+                    for (let i = 0; i < node.fileOffersInfo.length; i++) {
+                        if (node.fileOffersInfo[i].fileId == action.payload.fileID) {
+                            node.fileOffersInfo.splice(i, 1);
                         }
                     }
                     break;
@@ -226,49 +204,26 @@ const poolSlice = createSlice({
         clearFileOffers(state: PoolsState, action: PayloadAction<PoolAction>) {
             let pool = getPool(state, action);
             for (const node of pool.activeNodes) {
-                node.fileOffers = [];
+                node.fileOffersInfo = [];
             }
         },
         addDownload(state: PoolsState, action: PayloadAction<AddDownloadAction>) {
             let pool = getPool(state, action);
-            // for (let i = 0; i < pool.downloadQueue.length; i++) {
-            //     if (pool.downloadQueue[i].fileID == action.payload.fileInfo.fileID) {
-            //         pool.downloadQueue[i].progress = 0;
-            //         pool.downloadQueue[i].status = PoolDownloadProgressStatus.DOWNLOADING;
-            //         return;
-            //     }
-            // }
-            // let poolFileProgress: PoolFileProgress = {
-            //     fileOffer: { ...action.payload.fileInfo, seederNodeID: "" },
-            //     progress: 0,
-            //     status: PoolDownloadProgressStatus.DOWNLOADING,
-            // };
-            // pool.downloadQueue.push(poolFileProgress);
-            pool.downloadQueue.push({ ...action.payload.fileInfo, seederNodeID: "" });
+            pool.downloadQueue.push({ fileInfo: action.payload.fileInfo, seederNodeId: "" });
         },
-        // updateDownloadProgress(state: PoolsState, action: PayloadAction<UpdateDownloadProgressAction>) {
-        //     let pool = getPool(state, action);
-        //     for (let i = 0; i < pool.downloadQueue.length; i++) {
-        //         if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
-        //             pool.downloadQueue[i].progress = action.payload.progress;
-        //             return;
-        //         }
-        //     }
-        // },
-        // updateDownloadProgressStatus(state: PoolsState, action: PayloadAction<UpdateDownloadProgressStatusAction>) {
-        //     let pool = getPool(state, action);
-        //     for (let i = 0; i < pool.downloadQueue.length; i++) {
-        //         if (pool.downloadQueue[i].fileOffer.fileID == action.payload.fileID) {
-        //             pool.downloadQueue[i].fileOffer.seederNodeID = action.payload.seederNodeID;
-        //             pool.downloadQueue[i].status = action.payload.status;
-        //             return;
-        //         }
-        //     }
-        // },
+        updateDownloadSeederNodeID(state: PoolsState, action: PayloadAction<updateDownloadSeederNodeIDAction>) {
+            let pool = getPool(state, action);
+            for (let i = 0; i < pool.downloadQueue.length; i++) {
+                if (pool.downloadQueue[i].fileInfo!.fileId == action.payload.fileID) {
+                    pool.downloadQueue[i].seederNodeId = action.payload.seederNodeID;
+                    return;
+                }
+            }
+        },
         removeDownload(state: PoolsState, action: PayloadAction<RemoveDownloadAction>) {
             let pool = getPool(state, action);
             for (let i = 0; i < pool.downloadQueue.length; i++) {
-                if (pool.downloadQueue[i].fileID == action.payload.fileID) {
+                if (pool.downloadQueue[i].fileInfo!.fileId == action.payload.fileID) {
                     pool.downloadQueue.splice(i, 1);
                     return;
                 }
