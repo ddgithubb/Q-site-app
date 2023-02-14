@@ -289,7 +289,7 @@ export const PoolBasicNode = {
     }
     writer.uint32(18).fork();
     for (const v of message.path) {
-      writer.int32(v);
+      writer.uint32(v);
     }
     writer.ldelim();
     return writer;
@@ -309,10 +309,10 @@ export const PoolBasicNode = {
           if ((tag & 7) === 2) {
             const end2 = reader.uint32() + reader.pos;
             while (reader.pos < end2) {
-              message.path.push(reader.int32());
+              message.path.push(reader.uint32());
             }
           } else {
-            message.path.push(reader.int32());
+            message.path.push(reader.uint32());
           }
           break;
         default:
@@ -810,11 +810,11 @@ export const SSMessage_UpdateNodePositionData = {
   encode(message: SSMessage_UpdateNodePositionData, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     writer.uint32(10).fork();
     for (const v of message.path) {
-      writer.int32(v);
+      writer.uint32(v);
     }
     writer.ldelim();
     if (message.partnerInt !== 0) {
-      writer.uint32(16).int32(message.partnerInt);
+      writer.uint32(16).uint32(message.partnerInt);
     }
     if (message.centerCluster === true) {
       writer.uint32(24).bool(message.centerCluster);
@@ -839,14 +839,14 @@ export const SSMessage_UpdateNodePositionData = {
           if ((tag & 7) === 2) {
             const end2 = reader.uint32() + reader.pos;
             while (reader.pos < end2) {
-              message.path.push(reader.int32());
+              message.path.push(reader.uint32());
             }
           } else {
-            message.path.push(reader.int32());
+            message.path.push(reader.uint32());
           }
           break;
         case 2:
-          message.partnerInt = reader.int32();
+          message.partnerInt = reader.uint32();
           break;
         case 3:
           message.centerCluster = reader.bool();
@@ -1330,11 +1330,11 @@ export const SSMessage_AddNodeData = {
     }
     writer.uint32(34).fork();
     for (const v of message.path) {
-      writer.int32(v);
+      writer.uint32(v);
     }
     writer.ldelim();
     if (message.timestamp !== 0) {
-      writer.uint32(40).int64(message.timestamp);
+      writer.uint32(40).uint64(message.timestamp);
     }
     return writer;
   },
@@ -1359,14 +1359,14 @@ export const SSMessage_AddNodeData = {
           if ((tag & 7) === 2) {
             const end2 = reader.uint32() + reader.pos;
             while (reader.pos < end2) {
-              message.path.push(reader.int32());
+              message.path.push(reader.uint32());
             }
           } else {
-            message.path.push(reader.int32());
+            message.path.push(reader.uint32());
           }
           break;
         case 5:
-          message.timestamp = longToNumber(reader.int64() as Long);
+          message.timestamp = longToNumber(reader.uint64() as Long);
           break;
         default:
           reader.skipType(tag & 7);
@@ -1421,7 +1421,7 @@ export const SSMessage_RemoveNodeData = {
       writer.uint32(10).string(message.nodeId);
     }
     if (message.timestamp !== 0) {
-      writer.uint32(16).int64(message.timestamp);
+      writer.uint32(16).uint64(message.timestamp);
     }
     for (const v of message.promotedNodes) {
       PoolBasicNode.encode(v!, writer.uint32(26).fork()).ldelim();
@@ -1440,7 +1440,7 @@ export const SSMessage_RemoveNodeData = {
           message.nodeId = reader.string();
           break;
         case 2:
-          message.timestamp = longToNumber(reader.int64() as Long);
+          message.timestamp = longToNumber(reader.uint64() as Long);
           break;
         case 3:
           message.promotedNodes.push(PoolBasicNode.decode(reader, reader.uint32()));

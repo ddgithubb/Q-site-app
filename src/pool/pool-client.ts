@@ -218,6 +218,8 @@ export class PoolClient {
         console.log("Node position", this.nodePosition);
         this.checkForUneededBufferQueues();
         this.updateIsOnlyNode();
+
+        // BUG: The position of the nodeConnections are not updated
     }
 
     getOffer(targetNodeID: string): Promise<string> {
@@ -395,6 +397,7 @@ export class PoolClient {
         this.nodeID = initPoolData.myNode.nodeId;
         this.addNode(initPoolData.myNode);
 
+        // Should technically be in constructor
         let fileOffersData: PoolFile[] = FileManager.getFileOffers(this.poolID) || [];
         for (const fileOfferData of fileOffersData) {
             this.addAvailableFileOffer({
@@ -1014,23 +1017,25 @@ export class PoolClient {
                 }
                 if (reqData.chunksMissing.length != 0) {
                     // do {
-                    if (req.nextChunkNumber >= totalChunks) break;
-                    if (req.nextChunkNumber < reqData.chunksMissing[req.chunksMissingRangeNumber].start) {
-                        req.nextChunkNumber = reqData.chunksMissing[req.chunksMissingRangeNumber].start;
-                    } else if (req.nextChunkNumber > reqData.chunksMissing[req.chunksMissingRangeNumber].end) {
-                        do {
-                            req.chunksMissingRangeNumber++;
-                            if (req.chunksMissingRangeNumber >= reqData.chunksMissing.length) {
-                                req.nextChunkNumber = totalChunks;
-                                break;
-                            }
-                            if (req.nextChunkNumber <= reqData.chunksMissing[req.chunksMissingRangeNumber].end) {
-                                if (reqData.chunksMissing[req.chunksMissingRangeNumber].start > req.nextChunkNumber) {
-                                    req.nextChunkNumber = reqData.chunksMissing[req.chunksMissingRangeNumber].start;
+                    // if (req.nextChunkNumber >= totalChunks) break; 
+                    if (req.nextChunkNumber < totalChunks) {
+                        if (req.nextChunkNumber < reqData.chunksMissing[req.chunksMissingRangeNumber].start) {
+                            req.nextChunkNumber = reqData.chunksMissing[req.chunksMissingRangeNumber].start;
+                        } else if (req.nextChunkNumber > reqData.chunksMissing[req.chunksMissingRangeNumber].end) {
+                            do {
+                                req.chunksMissingRangeNumber++;
+                                if (req.chunksMissingRangeNumber >= reqData.chunksMissing.length) {
+                                    req.nextChunkNumber = totalChunks;
+                                    break;
                                 }
-                                break;
-                            }
-                        } while (true);
+                                if (req.nextChunkNumber <= reqData.chunksMissing[req.chunksMissingRangeNumber].end) {
+                                    if (reqData.chunksMissing[req.chunksMissingRangeNumber].start > req.nextChunkNumber) {
+                                        req.nextChunkNumber = reqData.chunksMissing[req.chunksMissingRangeNumber].start;
+                                    }
+                                    break;
+                                }
+                            } while (true);
+                        }
                     }
                     //     let chunkRanges = req.promisedChunksMap.get(getCacheChunkNumberFromChunkNumber(req.nextChunkNumber));
                     //     if (chunkRanges) {

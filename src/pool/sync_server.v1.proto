@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package sync_server.v1;
+
+option go_package = "/sstypes";
+
+enum DeviceType {
+    BROWSER = 0;
+    DESKTOP = 1;
+    MOBILE = 2;
+}
+
+message PoolBasicNode {
+    string node_id = 1;
+    repeated uint32 path = 2; 
+}
+
+message PoolUserInfo {
+    string user_id = 1;
+    string display_name = 2;
+    repeated PoolDeviceInfo devices = 3;
+}
+
+message PoolDeviceInfo {
+    string device_id = 1;
+    DeviceType device_type = 2;
+    string device_name = 3;
+}
+
+message SSMessage { // Sync Server Message
+
+    enum Op {
+        CLOSE = 0;
+        HEARTBEAT = 1;
+        UPDATE_NODE_POSITION = 2;
+        CONNECT_NODE = 3;
+        DISCONNECT_NODE = 4;
+        REPORT_NODE = 5;
+        SEND_OFFER = 6;
+        ANSWER_OFFER = 7;
+        VERIFY_NODE_CONNECTED = 8;
+        INIT_POOL = 9;
+        ADD_NODE = 10;
+        REMOVE_NODE = 11;
+        UPDATE_USER = 12;
+        REMOVE_USER = 13;
+    }
+
+    Op op = 1;
+    string key = 2;
+    oneof data {
+        SuccessResponseData success_response_data = 3;
+        UpdateNodePositionData update_node_position_data = 4;
+        ConnectNodeData connect_node_data = 5;
+        DisconnectNodeData disconnect_node_data = 6;
+        ReportNodeData report_node_data = 7;
+        SDPOfferData sdp_offer_data = 8;
+        SDPResponseData sdp_response_data = 9;
+        VerifyNodeConnectedData verify_node_connected_data = 10;
+        InitPoolData init_pool_data = 11;
+        AddNodeData add_node_data = 12;
+        RemoveNodeData remove_node_data = 13;
+        UpdateUserData update_user_data = 14;
+        RemoveUserData remove_user_data = 15;
+    }
+    
+    enum ReportCode {
+        DISCONNECT_REPORT = 0;
+    }
+
+    message SuccessResponseData {
+        bool success = 1;
+    }
+
+    message UpdateNodePositionData {
+        repeated uint32 path = 1;
+        uint32 partner_int = 2;
+        bool center_cluster = 3;
+        repeated string parent_cluster_node_ids = 4;
+        repeated string child_cluster_node_ids = 5;
+    }
+
+    message ConnectNodeData {
+        string node_id = 1;
+    }
+
+    message DisconnectNodeData {
+        string node_id = 1;
+    }
+    
+    message ReportNodeData {
+        string node_id = 1;
+        ReportCode report_code = 2;
+    }
+
+    message SDPOfferData {
+        string from_node_id = 1;
+        string sdp = 2;
+    }
+    
+    message SDPResponseData {
+        string sdp = 1;
+        bool success = 2;
+    }
+
+    message VerifyNodeConnectedData {
+        string node_id = 1;
+    }
+
+    message InitPoolData {
+        AddNodeData my_node = 1;
+        repeated AddNodeData init_nodes = 2;
+        repeated UpdateUserData update_users = 3;
+    }
+
+    message AddNodeData {
+        string node_id = 1;
+        string user_id = 2;
+        string device_id = 3;
+        repeated uint32 path = 4;
+        uint64 timestamp = 5;
+    }
+
+    message RemoveNodeData {
+        string node_id = 1;
+        uint64 timestamp = 2;
+        repeated PoolBasicNode promoted_nodes = 3;
+    }
+
+    message UpdateUserData {
+        PoolUserInfo userInfo = 1;
+    }
+
+    message RemoveUserData {
+        string user_id = 1;
+    }
+}

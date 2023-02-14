@@ -23,7 +23,7 @@ export function compactChunkRanges(chunkRanges: PoolChunkRange[]) {
         // continue because need to filter out all the start > end
     }
 
-    if (!compacted) return;
+    if (compacted) return;
 
     chunkRanges.sort((a, b) => a.start - b.start);
     let length = chunkRanges.length;
