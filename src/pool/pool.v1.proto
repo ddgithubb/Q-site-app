@@ -1,0 +1,175 @@
+syntax = "proto3";
+
+package pool.v1;
+
+enum PoolMediaType {
+    IMAGE = 0;
+}
+
+enum PoolNodeState {
+    INACTIVE = 0;
+    ACTIVE = 1;
+}
+
+message PoolFileInfo {
+    string file_id = 1;
+    string file_name = 2;
+    uint64 total_size = 3;
+    string origin_node_id = 4;
+}
+
+message PoolFileOffer {
+    PoolFileInfo file_info = 1;
+    string seeder_node_id = 2;
+}
+
+message PoolFileSeeders {
+    PoolFileInfo file_info = 1;
+    repeated string seeder_node_ids = 2;
+}
+
+message PoolImageData {
+    uint32 width = 1;
+    uint32 height = 2;
+    string preview_image_base64 = 3;
+}
+
+message PoolChunkRange {
+    uint64 start = 1; // inclusive
+    uint64 end = 2; // inclusive
+}
+
+message PoolMessage {
+
+    enum Type {
+        NODE_STATE = 0;
+        LATEST_REQUEST = 1;
+        LATEST_REPLY = 2;
+        TEXT = 3;
+        FILE_OFFER = 4;
+        MEDIA_OFFER = 5;
+        FILE_REQUEST = 6;
+        MEDIA_HINT_REQUEST = 7;
+        MEDIA_HINT_REPLY = 8;
+        RETRACT_FILE_OFFER = 9;
+        RETRACT_FILE_REQUEST = 10;
+    }
+
+    string msg_id = 1;
+    Type type = 2;
+    string user_id = 3;
+    uint64 created = 4;
+    oneof data {
+        NodeStateData node_state_data = 5;
+        LatestRequestData latest_request_data = 6;
+        LatestReplyData latest_reply_data = 7;
+        TextData text_data = 8;
+        PoolFileOffer file_offer_data = 9;
+        MediaOfferData media_offer_data = 10;
+        FileRequestData file_request_data = 11;
+        MediaHintRequestData media_hint_request_data = 12;
+        MediaHintReplyData media_hint_reply_data = 13;
+        RetractFileOfferData retract_file_offer_data = 14;
+        RetractFileRequestData retract_file_request_data = 15;
+    }
+
+    message NodeStateData {
+        string node_id = 1;
+        string user_id = 2;
+        PoolNodeState state = 3;
+    }
+
+    message LatestRequestData {
+        bool messages_only = 1;
+        string last_message_id = 2;
+        repeated PoolMessage missed_messages = 3;
+        repeated PoolFileOffer init_file_offers = 4;
+    }
+
+    message LatestReplyData {
+        repeated PoolMessage messages = 1;
+        repeated PoolFileSeeders file_seeders = 2;
+        bool last_message_id_found = 3;
+    }
+
+    message TextData {
+        string text = 1;
+    }
+
+    message MediaOfferData {
+        PoolFileOffer file_offer = 1;
+        PoolMediaType media_type = 2;
+        string format = 3;
+        oneof media_data {
+            PoolImageData image_data = 4;
+        }
+    }
+
+    message FileRequestData {
+        string file_id = 1;
+        string requesting_node_id = 2;
+        repeated PoolChunkRange chunks_missing = 3;
+        repeated PoolChunkRange promised_chunks = 4;
+    }
+    
+    message MediaHintRequestData {
+        string file_id = 1;
+    }
+
+    message MediaHintReplyData {
+        string file_id = 1;
+    }
+
+    message RetractFileOfferData {
+        string file_id = 1;
+        string node_id = 2;
+    }
+
+    message RetractFileRequestData {
+        string file_id = 1;
+        string requesting_node_id = 2;
+    }
+
+}
+
+message PoolMessagePackageSourceInfo {
+    string node_id = 1;
+    repeated uint32 path = 2; 
+}
+
+// WARNING: pool.hacks relies on this implementation
+message PoolMessagePackageDestinationInfo {
+    string node_id = 1;
+    optional bool visited = 2; // forces visited = false to be encoded
+}
+
+message PoolChunkInfo {
+    string file_id = 1;
+    uint64 chunk_number = 2;
+}
+
+// problem with optional PoolMessage is decoders
+// can run to problems where 0 is default, thereby
+// making optional useless
+message PoolMessagePackage {
+    PoolMessagePackageSourceInfo src = 1;
+    repeated PoolMessagePackageDestinationInfo dests = 2;
+    optional uint32 partner_int_path = 3;
+    optional PoolMessage msg = 4;
+    optional PoolChunkInfo chunk_info = 5;
+}
+
+// For encoding
+message PoolMessagePackageWithChunk {
+    PoolMessagePackageSourceInfo src = 1;
+    repeated PoolMessagePackageDestinationInfo dests = 2;
+    optional uint32 partner_int_path = 3;
+    optional PoolMessage msg = 4;
+    optional PoolChunkInfo chunk_info = 5;
+    optional bytes chunk = 6;
+}
+
+// For decoding
+message PoolMessagePackageWithOnlyChunk {
+    optional bytes chunk = 6;
+}

@@ -7,7 +7,7 @@ import { addToChunkRanges, compactChunkRanges, deleteCacheChunkFromChunkRanges, 
 // import { PoolChunkRange, PoolDownloadProgressStatus, PoolFileInfo, PoolFileRequest, PoolNode } from "./pool.model";
 // @ts-expect-error
 import PoolWorker from 'worker-loader!./pool.worker.js'
-import { CACHE_CHUNK_SIZE, CHUNK_SIZE, CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR } from "../config/caching";
+import { CACHE_CHUNK_SIZE, CHUNK_SIZE, CACHE_CHUNK_TO_CHUNK_SIZE_FACTOR, DISABLE_MEMORY_CHECKS } from "../config/caching";
 import { verifyFileHandlePermission } from "../utils/file-exists";
 import { APP_TYPE } from "../config/env";
 import { PoolChunkRange, PoolFileInfo } from "./pool.v1";
@@ -199,10 +199,14 @@ export class FileManagerClass {
     }
 
     checkFileSizeLimit(fileSize: number): boolean {
+        if (DISABLE_MEMORY_CHECKS) {
+            return true;
+        }
+        
         if (!this.fileSystemAccess) {
             let fileSizeLimit = store.getState().setting.storageSettings.maxFileCacheSize;
             if (fileSize > fileSizeLimit) {
-                alert("Cannot download files with size greater than " + fileSizeToString(fileSizeLimit, 0));
+                alert("Due to browser limitations, download files sizes are capped at " + fileSizeToString(fileSizeLimit, 0));
                 return false;
             } else if (fileSize + this.currentFileDownloadSize > fileSizeLimit) {
                 alert("Please wait for current files to complete downloading (to free up memory)!");

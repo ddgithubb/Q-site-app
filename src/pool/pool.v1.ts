@@ -262,7 +262,7 @@ export interface PoolMessagePackageSourceInfo {
 /** WARNING: pool.hacks relies on this implementation */
 export interface PoolMessagePackageDestinationInfo {
   nodeId: string;
-  /** To force encode visited = false */
+  /** forces visited = false to be encoded */
   visited?: boolean | undefined;
 }
 
@@ -279,7 +279,6 @@ export interface PoolChunkInfo {
 export interface PoolMessagePackage {
   src: PoolMessagePackageSourceInfo | undefined;
   dests: PoolMessagePackageDestinationInfo[];
-  /** bool has_partner_int_path = 3; */
   partnerIntPath?: number | undefined;
   msg?: PoolMessage | undefined;
   chunkInfo?: PoolChunkInfo | undefined;
@@ -289,7 +288,6 @@ export interface PoolMessagePackage {
 export interface PoolMessagePackageWithChunk {
   src: PoolMessagePackageSourceInfo | undefined;
   dests: PoolMessagePackageDestinationInfo[];
-  /** bool has_partner_int_path = 3; */
   partnerIntPath?: number | undefined;
   msg?: PoolMessage | undefined;
   chunkInfo?: PoolChunkInfo | undefined;
@@ -314,7 +312,7 @@ export const PoolFileInfo = {
       writer.uint32(18).string(message.fileName);
     }
     if (message.totalSize !== 0) {
-      writer.uint32(24).int64(message.totalSize);
+      writer.uint32(24).uint64(message.totalSize);
     }
     if (message.originNodeId !== "") {
       writer.uint32(34).string(message.originNodeId);
@@ -336,7 +334,7 @@ export const PoolFileInfo = {
           message.fileName = reader.string();
           break;
         case 3:
-          message.totalSize = longToNumber(reader.int64() as Long);
+          message.totalSize = longToNumber(reader.uint64() as Long);
           break;
         case 4:
           message.originNodeId = reader.string();
@@ -510,10 +508,10 @@ function createBasePoolImageData(): PoolImageData {
 export const PoolImageData = {
   encode(message: PoolImageData, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.width !== 0) {
-      writer.uint32(8).int32(message.width);
+      writer.uint32(8).uint32(message.width);
     }
     if (message.height !== 0) {
-      writer.uint32(16).int32(message.height);
+      writer.uint32(16).uint32(message.height);
     }
     if (message.previewImageBase64 !== "") {
       writer.uint32(26).string(message.previewImageBase64);
@@ -529,10 +527,10 @@ export const PoolImageData = {
       const tag = reader.uint32();
       switch (tag >>> 3) {
         case 1:
-          message.width = reader.int32();
+          message.width = reader.uint32();
           break;
         case 2:
-          message.height = reader.int32();
+          message.height = reader.uint32();
           break;
         case 3:
           message.previewImageBase64 = reader.string();
@@ -577,10 +575,10 @@ function createBasePoolChunkRange(): PoolChunkRange {
 export const PoolChunkRange = {
   encode(message: PoolChunkRange, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.start !== 0) {
-      writer.uint32(8).int64(message.start);
+      writer.uint32(8).uint64(message.start);
     }
     if (message.end !== 0) {
-      writer.uint32(16).int64(message.end);
+      writer.uint32(16).uint64(message.end);
     }
     return writer;
   },
@@ -593,10 +591,10 @@ export const PoolChunkRange = {
       const tag = reader.uint32();
       switch (tag >>> 3) {
         case 1:
-          message.start = longToNumber(reader.int64() as Long);
+          message.start = longToNumber(reader.uint64() as Long);
           break;
         case 2:
-          message.end = longToNumber(reader.int64() as Long);
+          message.end = longToNumber(reader.uint64() as Long);
           break;
         default:
           reader.skipType(tag & 7);
@@ -657,7 +655,7 @@ export const PoolMessage = {
       writer.uint32(26).string(message.userId);
     }
     if (message.created !== 0) {
-      writer.uint32(32).int64(message.created);
+      writer.uint32(32).uint64(message.created);
     }
     if (message.nodeStateData !== undefined) {
       PoolMessage_NodeStateData.encode(message.nodeStateData, writer.uint32(42).fork()).ldelim();
@@ -712,7 +710,7 @@ export const PoolMessage = {
           message.userId = reader.string();
           break;
         case 4:
-          message.created = longToNumber(reader.int64() as Long);
+          message.created = longToNumber(reader.uint64() as Long);
           break;
         case 5:
           message.nodeStateData = PoolMessage_NodeStateData.decode(reader, reader.uint32());
@@ -1554,7 +1552,7 @@ export const PoolMessagePackageSourceInfo = {
     }
     writer.uint32(18).fork();
     for (const v of message.path) {
-      writer.int32(v);
+      writer.uint32(v);
     }
     writer.ldelim();
     return writer;
@@ -1574,10 +1572,10 @@ export const PoolMessagePackageSourceInfo = {
           if ((tag & 7) === 2) {
             const end2 = reader.uint32() + reader.pos;
             while (reader.pos < end2) {
-              message.path.push(reader.int32());
+              message.path.push(reader.uint32());
             }
           } else {
-            message.path.push(reader.int32());
+            message.path.push(reader.uint32());
           }
           break;
         default:
@@ -1684,7 +1682,7 @@ export const PoolChunkInfo = {
       writer.uint32(10).string(message.fileId);
     }
     if (message.chunkNumber !== 0) {
-      writer.uint32(16).int64(message.chunkNumber);
+      writer.uint32(16).uint64(message.chunkNumber);
     }
     return writer;
   },
@@ -1700,7 +1698,7 @@ export const PoolChunkInfo = {
           message.fileId = reader.string();
           break;
         case 2:
-          message.chunkNumber = longToNumber(reader.int64() as Long);
+          message.chunkNumber = longToNumber(reader.uint64() as Long);
           break;
         default:
           reader.skipType(tag & 7);
@@ -1745,13 +1743,13 @@ export const PoolMessagePackage = {
       PoolMessagePackageDestinationInfo.encode(v!, writer.uint32(18).fork()).ldelim();
     }
     if (message.partnerIntPath !== undefined) {
-      writer.uint32(32).int32(message.partnerIntPath);
+      writer.uint32(24).uint32(message.partnerIntPath);
     }
     if (message.msg !== undefined) {
-      PoolMessage.encode(message.msg, writer.uint32(42).fork()).ldelim();
+      PoolMessage.encode(message.msg, writer.uint32(34).fork()).ldelim();
     }
     if (message.chunkInfo !== undefined) {
-      PoolChunkInfo.encode(message.chunkInfo, writer.uint32(50).fork()).ldelim();
+      PoolChunkInfo.encode(message.chunkInfo, writer.uint32(42).fork()).ldelim();
     }
     return writer;
   },
@@ -1769,13 +1767,13 @@ export const PoolMessagePackage = {
         case 2:
           message.dests.push(PoolMessagePackageDestinationInfo.decode(reader, reader.uint32()));
           break;
-        case 4:
-          message.partnerIntPath = reader.int32();
+        case 3:
+          message.partnerIntPath = reader.uint32();
           break;
-        case 5:
+        case 4:
           message.msg = PoolMessage.decode(reader, reader.uint32());
           break;
-        case 6:
+        case 5:
           message.chunkInfo = PoolChunkInfo.decode(reader, reader.uint32());
           break;
         default:
@@ -1848,16 +1846,16 @@ export const PoolMessagePackageWithChunk = {
       PoolMessagePackageDestinationInfo.encode(v!, writer.uint32(18).fork()).ldelim();
     }
     if (message.partnerIntPath !== undefined) {
-      writer.uint32(32).int32(message.partnerIntPath);
+      writer.uint32(24).uint32(message.partnerIntPath);
     }
     if (message.msg !== undefined) {
-      PoolMessage.encode(message.msg, writer.uint32(42).fork()).ldelim();
+      PoolMessage.encode(message.msg, writer.uint32(34).fork()).ldelim();
     }
     if (message.chunkInfo !== undefined) {
-      PoolChunkInfo.encode(message.chunkInfo, writer.uint32(50).fork()).ldelim();
+      PoolChunkInfo.encode(message.chunkInfo, writer.uint32(42).fork()).ldelim();
     }
     if (message.chunk !== undefined) {
-      writer.uint32(58).bytes(message.chunk);
+      writer.uint32(50).bytes(message.chunk);
     }
     return writer;
   },
@@ -1875,16 +1873,16 @@ export const PoolMessagePackageWithChunk = {
         case 2:
           message.dests.push(PoolMessagePackageDestinationInfo.decode(reader, reader.uint32()));
           break;
-        case 4:
-          message.partnerIntPath = reader.int32();
+        case 3:
+          message.partnerIntPath = reader.uint32();
           break;
-        case 5:
+        case 4:
           message.msg = PoolMessage.decode(reader, reader.uint32());
           break;
-        case 6:
+        case 5:
           message.chunkInfo = PoolChunkInfo.decode(reader, reader.uint32());
           break;
-        case 7:
+        case 6:
           message.chunk = reader.bytes();
           break;
         default:
@@ -1948,7 +1946,7 @@ function createBasePoolMessagePackageWithOnlyChunk(): PoolMessagePackageWithOnly
 export const PoolMessagePackageWithOnlyChunk = {
   encode(message: PoolMessagePackageWithOnlyChunk, writer: _m0.Writer = _m0.Writer.create()): _m0.Writer {
     if (message.chunk !== undefined) {
-      writer.uint32(58).bytes(message.chunk);
+      writer.uint32(50).bytes(message.chunk);
     }
     return writer;
   },
@@ -1960,7 +1958,7 @@ export const PoolMessagePackageWithOnlyChunk = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 7:
+        case 6:
           message.chunk = reader.bytes();
           break;
         default:
